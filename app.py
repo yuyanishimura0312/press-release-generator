@@ -15,6 +15,7 @@ import anthropic
 from bs4 import BeautifulSoup
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 # -- Config --
 PROFILE_DIR = Path(__file__).parent / "profiles"
@@ -64,6 +65,155 @@ def save_profile(data: dict, name: str):
     path = PROFILE_DIR / f"{name}.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# -- Notion page reader --
+
+def extract_notion_page_id(url_or_id: str) -> str:
+    """Extract Notion page ID from URL or raw ID."""
+    clean = url_or_id.strip().replace("-", "")
+    if re.match(r'^[0-9a-f]{32}$', clean):
+        return f"{clean[:8]}-{clean[8:12]}-{clean[12:16]}-{clean[16:20]}-{clean[20:]}"
+    match = re.search(r'([0-9a-f]{32})', url_or_id.split("?")[0])
+    if match:
+        h = match.group(1)
+        return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
+    raise ValueError(f"NotionページIDを抽出できません: {url_or_id}")
+
+
+def _get_block_text(block: dict) -> str:
+    """Extract text content from a single Notion block."""
+    block_type = block.get("type", "")
+    block_data = block.get(block_type, {})
+
+    if "rich_text" in block_data:
+        content = "".join(t.get("plain_text", "") for t in block_data["rich_text"])
+        prefixes = {
+            "heading_1": "# ", "heading_2": "## ", "heading_3": "### ",
+            "bulleted_list_item": "- ", "numbered_list_item": "1. ",
+            "quote": "> ", "callout": "> ", "toggle": "* ",
+        }
+        if block_type == "to_do":
+            mark = "x" if block_data.get("checked") else " "
+            return f"- [{mark}] {content}"
+        return f"{prefixes.get(block_type, '')}{content}"
+
+    if block_type == "table_row":
+        cells = block_data.get("cells", [])
+        return " | ".join(
+            "".join(t.get("plain_text", "") for t in cell) for cell in cells
+        )
+    if block_type == "divider":
+        return "---"
+    return ""
+
+
+def fetch_notion_blocks(page_id: str, api_key: str) -> list[dict]:
+    """Fetch all blocks from a Notion page with pagination."""
+    headers = {"Authorization": f"Bearer {api_key}", "Notion-Version": "2022-06-28"}
+    all_blocks = []
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=100"
+
+    while url:
+        resp = requests.get(url, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+        all_blocks.extend(data.get("results", []))
+        if data.get("has_more"):
+            cursor = data["next_cursor"]
+            url = f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=100&start_cursor={cursor}"
+        else:
+            url = None
+
+    for block in all_blocks:
+        if block.get("has_children"):
+            block["_children"] = fetch_notion_blocks(block["id"], api_key)
+
+    return all_blocks
+
+
+def blocks_to_text(blocks: list[dict], indent: int = 0) -> str:
+    """Convert Notion blocks to readable text."""
+    lines = []
+    prefix = "  " * indent
+    for block in blocks:
+        text = _get_block_text(block)
+        if text:
+            lines.append(f"{prefix}{text}")
+        for child in block.get("_children", []):
+            child_text = _get_block_text(child)
+            if child_text:
+                lines.append(f"{'  ' * (indent + 1)}{child_text}")
+            for grandchild in child.get("_children", []):
+                gc_text = _get_block_text(grandchild)
+                if gc_text:
+                    lines.append(f"{'  ' * (indent + 2)}{gc_text}")
+    return "\n".join(lines)
+
+
+def read_notion_page(url_or_id: str, api_key: str) -> dict:
+    """Read a Notion page and return title + content text."""
+    page_id = extract_notion_page_id(url_or_id)
+    headers = {"Authorization": f"Bearer {api_key}", "Notion-Version": "2022-06-28"}
+
+    resp = requests.get(f"https://api.notion.com/v1/pages/{page_id}", headers=headers)
+    resp.raise_for_status()
+    page_data = resp.json()
+
+    # Extract title
+    title = ""
+    for prop in page_data.get("properties", {}).values():
+        if prop.get("type") == "title":
+            title = "".join(t.get("plain_text", "") for t in prop.get("title", []))
+            break
+
+    blocks = fetch_notion_blocks(page_id, api_key)
+    content = blocks_to_text(blocks)
+
+    return {"title": title, "content": content, "page_id": page_id}
+
+
+def analyze_notion_content_with_ai(title: str, content: str, release_type: str) -> dict:
+    """Use AI to analyze Notion page content and extract release info."""
+    client = get_anthropic_client()
+
+    type_fields = {
+        "service": "サービス名、サービスURL、ターゲット、サービス概要、背景・課題、主な特徴（3つ程度）、差別化ポイント、数値データ、価格、代表コメント、今後の展望",
+        "partnership": "提携先企業名、提携の種類、提携の目的・背景、提携内容の詳細、期待される成果、代表コメント、提携先コメント",
+        "funding": "ラウンド、調達金額、投資家（1行1社）、リードインベスター、資金使途、事業概要、市場背景、今後の戦略、代表コメント",
+        "event": "イベント名、開催日時、開催場所、対象者、イベント概要、プログラム・登壇者、定員、参加費、申込URL",
+        "update": "サービス名、サービスURL、アップデート概要、主な変更点、アップデートの背景、ユーザーへのメリット",
+        "award": "受賞名、授与機関、受賞日、受賞理由、対象サービス概要、受賞の意義",
+    }
+
+    prompt = f"""以下はNotionページから取得した、プレスリリースの素材情報です。
+この内容を分析して、「{RELEASE_TYPES[release_type]}」のプレスリリースに必要な情報を抽出してください。
+
+【ページタイトル】
+{title}
+
+【ページ内容】
+{content[:6000]}
+
+---
+
+以下の情報を抽出し、整理してテキストで返してください:
+{type_fields.get(release_type, '')}
+
+見つからない情報は「（情報なし）」としてください。
+箇条書きではなく「項目名: 値」の形式で返してください。
+ページの内容を最大限活用し、プレスリリースに使える情報を漏れなく抽出してください。"""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return {
+        "analyzed_text": response.content[0].text.strip(),
+        "raw_content": content,
+        "title": title,
+    }
 
 
 # -- Web scraping for company info --
@@ -497,6 +647,78 @@ with tab_company:
 
 with tab_input:
     st.header(f"{RELEASE_TYPES[release_type]}の情報")
+
+    # -- Notion import section --
+    with st.expander("Notionページから読み込む", expanded=False):
+        st.caption("NotionページのURLを貼り付けると、ページ内容を自動で読み取り・解析してフォームに反映します。")
+
+        notion_key = os.environ.get("NOTION_API_KEY", "")
+        if not notion_key:
+            st.info(
+                "Notion APIキーが未設定です。以下の手順で設定してください:\n\n"
+                "1. [Notion Integrations](https://www.notion.so/profile/integrations) にアクセス\n"
+                "2. 「新しいインテグレーション」を作成（名前は自由）\n"
+                "3. 読み取りたいNotionページで「...」→「コネクト」からインテグレーションを追加\n"
+                "4. トークンをここに入力"
+            )
+            notion_key_input = st.text_input("Notion APIキー", type="password", key="notion_key_input")
+            if notion_key_input:
+                # Save to .env
+                env_content = ENV_FILE.read_text() if ENV_FILE.exists() else ""
+                if "NOTION_API_KEY" not in env_content:
+                    env_content += f"\nNOTION_API_KEY={notion_key_input}\n"
+                else:
+                    env_content = re.sub(r'NOTION_API_KEY=.*', f'NOTION_API_KEY={notion_key_input}', env_content)
+                ENV_FILE.write_text(env_content)
+                os.environ["NOTION_API_KEY"] = notion_key_input
+                notion_key = notion_key_input
+                st.success("Notion APIキーを保存しました")
+                st.rerun()
+
+        if notion_key:
+            notion_url = st.text_input(
+                "NotionページURL",
+                placeholder="https://www.notion.so/Your-Page-abc123...",
+                key="notion_url",
+            )
+            if st.button("Notionから読み込む", use_container_width=True):
+                if notion_url:
+                    with st.spinner("Notionページを読み取り中..."):
+                        try:
+                            page_data = read_notion_page(notion_url, notion_key)
+                        except Exception as e:
+                            page_data = None
+                            st.error(f"Notion読み取りエラー: {e}")
+
+                    if page_data and page_data.get("content"):
+                        st.success(f"「{page_data['title']}」を読み取りました（{len(page_data['content'])}文字）")
+                        with st.spinner("AIで内容を解析中..."):
+                            try:
+                                analyzed = analyze_notion_content_with_ai(
+                                    page_data["title"],
+                                    page_data["content"],
+                                    release_type,
+                                )
+                                st.session_state["notion_analyzed"] = analyzed
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"AI解析エラー: {e}")
+                    elif page_data:
+                        st.warning("ページの内容が空です。インテグレーションがページに接続されているか確認してください。")
+
+    # Show Notion analysis result and pre-fill the main text area
+    notion_data = st.session_state.get("notion_analyzed")
+    notion_prefill = ""
+    if notion_data:
+        st.success(f"Notionページ「{notion_data['title']}」の内容を解析済み")
+        with st.expander("解析結果を確認", expanded=False):
+            st.text(notion_data["analyzed_text"])
+        notion_prefill = notion_data["analyzed_text"]
+        if st.button("Notion解析データをクリア", key="clear_notion"):
+            del st.session_state["notion_analyzed"]
+            st.rerun()
+
+    st.divider()
     st.caption("簡潔に要点だけ入力してください。AIが自動的にプレスリリースの文体・構成に仕上げます。")
 
     # --- Release-type-specific minimal input ---
@@ -633,6 +855,12 @@ with tab_input:
 受賞理由: {awd_reason}
 その他: {awd_extra}"""
         can_generate = bool(awd_name and awd_body and awd_date and awd_reason)
+
+    # Append Notion analyzed content to user_input
+    if notion_prefill:
+        user_input += f"\n\n【Notionページから取得した詳細情報】\n{notion_prefill}"
+        # If Notion data exists, allow generation even with fewer manual fields
+        can_generate = True
 
     # -- Generate button --
     st.divider()

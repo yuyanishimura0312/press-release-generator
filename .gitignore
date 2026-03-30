@@ -7,4 +7,5 @@ profiles/
 *.md
 !README.md
 output/
+notion_content.json
 .streamlit/
