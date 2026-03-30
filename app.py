@@ -872,6 +872,8 @@ with tab_input:
                 "raw_content": content,
                 "title": title,
             }
+            # Flag to force-update form fields on next render
+            st.session_state["_notion_fresh"] = True
 
             # Auto-detect company and scrape website
             company_info = result.get("company", {})
@@ -1007,6 +1009,11 @@ with tab_input:
             del st.session_state["notion_analyzed"]
             if "extracted_company" in st.session_state:
                 del st.session_state["extracted_company"]
+            # Clear all possible form field keys
+            for prefix in ["svc_", "ptr_", "fund_", "evt_", "upd_", "awd_"]:
+                for k in list(st.session_state.keys()):
+                    if k.startswith(prefix):
+                        del st.session_state[k]
             st.rerun()
 
     st.divider()
@@ -1046,10 +1053,8 @@ with tab_input:
         """Get Notion-parsed value. Tries exact match first, then partial match."""
         if not _notion_fields:
             return ""
-        # Exact match
         if key in _notion_fields:
             return _notion_fields[key]
-        # Partial match (e.g. "サービス名" matches "サービス名/プロダクト名")
         for k, v in _notion_fields.items():
             if key in k or k in key:
                 return v
@@ -1126,12 +1131,19 @@ with tab_input:
     fields = FIELD_DEFS.get(release_type, [])
     field_values = {}
 
+    # Pre-populate session state from Notion data BEFORE widgets render
+    # Streamlit ignores `value=` if the key already exists in session_state
+    # So we write directly to session_state when fresh Notion data arrives
+    if _notion_fields and st.session_state.pop("_notion_fresh", False):
+        for label, key, field_type, placeholder in fields:
+            notion_val = _nv(label)
+            st.session_state[key] = notion_val  # overwrite even if empty
+
     for label, key, field_type, placeholder in fields:
-        default = _nv(label)
         if field_type == "text":
-            field_values[label] = st.text_input(label, value=default, key=key, placeholder=placeholder)
+            field_values[label] = st.text_input(label, key=key, placeholder=placeholder)
         else:
-            field_values[label] = st.text_area(label, value=default, key=key, height=80, placeholder=placeholder)
+            field_values[label] = st.text_area(label, key=key, height=80, placeholder=placeholder)
 
     # Build user_input from field values
     user_input_parts = []
