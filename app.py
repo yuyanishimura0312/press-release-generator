@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
+import markdown as md_lib
 
 # -- Config --
 PROFILE_DIR = Path(__file__).parent / "profiles"
@@ -275,6 +276,116 @@ JSONのみを返してください。"""
     if json_match:
         return json.loads(json_match.group())
     return {}
+
+
+# -- PDF generation --
+
+def generate_pdf(markdown_text: str) -> bytes:
+    """Convert markdown press release to styled PDF."""
+    from weasyprint import HTML
+
+    html_body = md_lib.markdown(markdown_text, extensions=["tables", "fenced_code"])
+
+    html_full = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
+
+@page {{
+    size: A4;
+    margin: 28mm 24mm 24mm 24mm;
+}}
+body {{
+    font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.85;
+    color: #1A1A1A;
+}}
+h1 {{
+    font-size: 16pt;
+    font-weight: 700;
+    color: #783C28;
+    border-bottom: 2px solid #783C28;
+    padding-bottom: 10px;
+    margin-bottom: 6px;
+    line-height: 1.5;
+}}
+h2 {{
+    font-size: 12pt;
+    font-weight: 600;
+    color: #783C28;
+    margin-top: 24px;
+    margin-bottom: 8px;
+    padding-left: 10px;
+    border-left: 3px solid #D3836F;
+}}
+p {{
+    margin-bottom: 12px;
+    text-align: justify;
+}}
+strong {{
+    color: #1A1A1A;
+    font-weight: 600;
+}}
+hr {{
+    border: none;
+    border-top: 1px solid #E8E2DC;
+    margin: 24px 0;
+}}
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 9.5pt;
+}}
+th, td {{
+    border: 1px solid #E8E2DC;
+    padding: 8px 12px;
+    text-align: left;
+}}
+th {{
+    background: #F7F2ED;
+    font-weight: 600;
+    color: #783C28;
+    width: 100px;
+}}
+ul, ol {{
+    padding-left: 20px;
+    margin-bottom: 12px;
+}}
+li {{
+    margin-bottom: 4px;
+}}
+blockquote {{
+    border-left: 3px solid #D3836F;
+    padding: 10px 18px;
+    margin: 14px 0;
+    background: #FDFAF7;
+    color: #4a4a4a;
+}}
+.pr-label {{
+    display: inline-block;
+    background: #783C28;
+    color: #FDFAF7;
+    font-size: 7pt;
+    padding: 2px 12px;
+    border-radius: 2px;
+    margin-bottom: 16px;
+    letter-spacing: 0.18em;
+    font-weight: 600;
+    text-transform: uppercase;
+}}
+</style>
+</head>
+<body>
+<span class="pr-label">PRESS RELEASE</span>
+{html_body}
+</body>
+</html>"""
+
+    return HTML(string=html_full).write_pdf()
 
 
 # -- Web scraping for company info --
@@ -1347,8 +1458,7 @@ with tab_input:
             """, unsafe_allow_html=True)
 
             # Convert markdown to styled HTML
-            import markdown
-            html_body = markdown.markdown(
+            html_body = md_lib.markdown(
                 result,
                 extensions=["tables", "fenced_code"],
             )
@@ -1366,8 +1476,28 @@ with tab_input:
             st.code(plain, language=None)
 
         st.divider()
-        col_dl1, col_dl2 = st.columns(2)
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
         with col_dl1:
+            try:
+                pdf_data = generate_pdf(result)
+                st.download_button(
+                    label="PDFでダウンロード",
+                    data=pdf_data,
+                    file_name=f"press_release_{release_type}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    type="primary",
+                )
+            except Exception as e:
+                st.download_button(
+                    label="PDF (未対応)",
+                    data="",
+                    file_name="error.txt",
+                    disabled=True,
+                    use_container_width=True,
+                )
+                st.caption(f"PDF生成エラー: {e}")
+        with col_dl2:
             st.download_button(
                 label="Markdownでダウンロード",
                 data=result,
@@ -1375,10 +1505,10 @@ with tab_input:
                 mime="text/markdown",
                 use_container_width=True,
             )
-        with col_dl2:
+        with col_dl3:
             plain = result.replace("# ", "").replace("## ", "").replace("**", "").replace("---", "").replace("|", " ")
             st.download_button(
-                label="プレーンテキストでダウンロード",
+                label="テキストでダウンロード",
                 data=plain,
                 file_name=f"press_release_{release_type}_{datetime.now().strftime('%Y%m%d')}.txt",
                 mime="text/plain",
