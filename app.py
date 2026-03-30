@@ -1087,6 +1087,30 @@ st.markdown("""
 
     /* -- Alerts -- */
     .stAlert { border-radius: var(--radius-md) !important; }
+
+    /* -- Spacing tweaks -- */
+    .stTextInput, .stTextArea { margin-bottom: -8px !important; }
+    .stTextArea > div > div > textarea { min-height: 72px !important; }
+
+    /* -- Placeholder -- */
+    .stTextInput > div > div > input::placeholder,
+    .stTextArea > div > div > textarea::placeholder {
+        color: #C4C4C4 !important;
+        font-size: 0.8125rem !important;
+    }
+
+    /* -- Tab panel padding -- */
+    .stTabs [data-baseweb="tab-panel"] { padding-top: 24px !important; }
+
+    /* -- Company info 2-col -- */
+    [data-testid="stHorizontalBlock"] {
+        gap: 16px !important;
+    }
+
+    /* -- Better scrollbar -- */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: #D4D4D4; border-radius: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1188,10 +1212,21 @@ def val(key: str, default: str = "") -> str:
 
 # -- Main area --
 st.markdown("""
-<div style="margin-bottom: 20px;">
-    <h1 style="margin-bottom: 4px;">プレスリリース自動生成</h1>
-    <p style="color: #737373; font-size: 0.875rem; margin: 0;">
-        Notionから読み込み / AI自動生成 / PR Times最適化 / PDF出力
+<div style="margin: 8px 0 28px 0;">
+    <h1 style="margin-bottom: 6px; font-size: 1.5rem;">プレスリリース自動生成</h1>
+    <p style="color: #737373; font-size: 0.8125rem; margin: 0; display: flex; gap: 16px; flex-wrap: wrap;">
+        <span style="display: inline-flex; align-items: center; gap: 4px;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: #16A34A; display: inline-block;"></span>
+            AI自動生成
+        </span>
+        <span style="display: inline-flex; align-items: center; gap: 4px;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: #783C28; display: inline-block;"></span>
+            PR Times最適化
+        </span>
+        <span style="display: inline-flex; align-items: center; gap: 4px;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: #2563EB; display: inline-block;"></span>
+            PDF / Markdown出力
+        </span>
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -1272,75 +1307,70 @@ with tab_company:
 with tab_input:
     st.header(f"{RELEASE_TYPES[release_type]}の情報")
 
-    # -- Notion import section --
+    # -- Notion import section (only if server has API key) --
     notion_key = os.environ.get("NOTION_API_KEY", "")
-    NOTION_CONTENT_FILE = Path(__file__).parent / "notion_content.json"
-    FETCH_SCRIPT = Path(__file__).parent / "fetch_notion.sh"
+    if notion_key:
+        with st.expander("Notionページから読み込む", expanded=False):
+            st.caption("NotionページURLを貼り付けると、内容を自動で解析してフォームに反映します。")
 
-    with st.expander("Notionページから読み込む", expanded=False):
-        st.caption("NotionページのURLを貼り付けると、ページ内容を自動で読み取り・解析してフォームに反映します。")
+            notion_url = st.text_input(
+                "NotionページURL",
+                placeholder="https://www.notion.so/Your-Page-abc123...",
+                key="notion_url",
+            )
 
-        notion_url = st.text_input(
-            "NotionページURL",
-            placeholder="https://www.notion.so/Your-Page-abc123...",
-            key="notion_url",
-        )
+            def _run_notion_analysis(page_data: dict):
+                """Notionデータを解析し、会社情報も自動取得する。"""
+                title = page_data["title"]
+                content = page_data["content"]
+                st.success(f"{title} を読み取りました（{len(content)}文字）")
 
-        def _run_notion_analysis(page_data: dict):
-            """Notionデータを解析し、会社情報も自動取得する共通処理。"""
-            title = page_data["title"]
-            content = page_data["content"]
-            st.success(f"{title} を読み取りました（{len(content)}文字）")
+                with st.spinner("AIで内容を解析中..."):
+                    try:
+                        result = analyze_notion_full(title, content, release_type)
+                    except Exception as e:
+                        st.error(f"AI解析エラー: {e}")
+                        return
 
-            with st.spinner("AIで内容を解析中...（会社特定＋リリース情報抽出）"):
-                try:
-                    result = analyze_notion_full(title, content, release_type)
-                except Exception as e:
-                    st.error(f"AI解析エラー: {e}")
+                if not result:
+                    st.error("解析結果を取得できませんでした")
                     return
 
-            if not result:
-                st.error("解析結果を取得できませんでした")
-                return
+                st.session_state["notion_analyzed"] = {
+                    "analyzed_text": result.get("release_info", ""),
+                    "raw_content": content,
+                    "title": title,
+                }
+                st.session_state["_notion_fresh"] = True
 
-            st.session_state["notion_analyzed"] = {
-                "analyzed_text": result.get("release_info", ""),
-                "raw_content": content,
-                "title": title,
-            }
-            st.session_state["_notion_fresh"] = True
+                company_info = result.get("company", {})
+                company_url_detected = company_info.get("company_url", "")
 
-            # Auto-detect company and scrape website
-            company_info = result.get("company", {})
-            company_url_detected = company_info.get("company_url", "")
-
-            if company_url_detected:
-                with st.spinner(f"会社情報を自動取得中..."):
-                    try:
-                        scraped = scrape_company_info(company_url_detected)
-                        if scraped["success"]:
-                            extracted = extract_company_with_ai(scraped["text"], company_url_detected)
-                            if extracted:
-                                st.session_state["extracted_company"] = extracted
-                        else:
+                if company_url_detected:
+                    with st.spinner("会社情報を自動取得中..."):
+                        try:
+                            scraped = scrape_company_info(company_url_detected)
+                            if scraped["success"]:
+                                extracted = extract_company_with_ai(scraped["text"], company_url_detected)
+                                if extracted:
+                                    st.session_state["extracted_company"] = extracted
+                            else:
+                                st.session_state["extracted_company"] = {
+                                    "company_name": company_info.get("company_name", ""),
+                                    "url": company_url_detected,
+                                }
+                        except Exception:
                             st.session_state["extracted_company"] = {
                                 "company_name": company_info.get("company_name", ""),
                                 "url": company_url_detected,
                             }
-                    except Exception:
-                        st.session_state["extracted_company"] = {
-                            "company_name": company_info.get("company_name", ""),
-                            "url": company_url_detected,
-                        }
 
-            suggested = result.get("release_type_suggestion", "")
-            if suggested and suggested != release_type:
-                st.info(f"AIの提案: このNotionの内容は「{RELEASE_TYPES.get(suggested, suggested)}」に最適です。サイドバーで変更できます。")
+                suggested = result.get("release_type_suggestion", "")
+                if suggested and suggested != release_type:
+                    st.info(f"AIの提案: 「{RELEASE_TYPES.get(suggested, suggested)}」が最適です。サイドバーで変更できます。")
 
-            st.rerun()
+                st.rerun()
 
-        if notion_key:
-            # Direct API access
             if st.button("Notionから読み込む", type="primary", use_container_width=True):
                 if notion_url:
                     with st.spinner("Notionページを読み取り中..."):
@@ -1352,54 +1382,7 @@ with tab_input:
                     if page_data and page_data.get("content"):
                         _run_notion_analysis(page_data)
                     elif page_data:
-                        st.warning("ページの内容が空です。インテグレーションがページに接続されているか確認してください。")
-        else:
-            # CLI bridge or cached file
-            col_n1, col_n2 = st.columns([2, 1])
-            with col_n1:
-                if st.button("Notionから読み込む（CLI経由）", use_container_width=True):
-                    if notion_url:
-                        with st.spinner("Claude CLI経由で読み取り中...（30〜60秒）"):
-                            import subprocess
-                            try:
-                                sub_result = subprocess.run(
-                                    [str(FETCH_SCRIPT), notion_url],
-                                    capture_output=True, text=True, timeout=120,
-                                    cwd=str(Path(__file__).parent),
-                                )
-                                if NOTION_CONTENT_FILE.exists():
-                                    page_data = json.loads(NOTION_CONTENT_FILE.read_text())
-                                    if page_data.get("content"):
-                                        _run_notion_analysis(page_data)
-                                    else:
-                                        st.warning("ページの内容が空です")
-                                else:
-                                    st.error("読み取りに失敗しました")
-                            except subprocess.TimeoutExpired:
-                                st.error("タイムアウト")
-                            except Exception as e:
-                                st.error(f"エラー: {e}")
-            with col_n2:
-                if NOTION_CONTENT_FILE.exists():
-                    if st.button("前回のデータを使用", use_container_width=True):
-                        page_data = json.loads(NOTION_CONTENT_FILE.read_text())
-                        if page_data.get("content"):
-                            _run_notion_analysis(page_data)
-
-            # API key setup option
-            with st.popover("Notion APIキーを設定"):
-                st.caption("APIキーを設定すると直接読み込めます。")
-                notion_key_input = st.text_input("Notion APIキー", type="password", key="notion_key_input")
-                if notion_key_input:
-                    env_content = ENV_FILE.read_text() if ENV_FILE.exists() else ""
-                    if "NOTION_API_KEY" not in env_content:
-                        env_content += f"\nNOTION_API_KEY={notion_key_input}\n"
-                    else:
-                        env_content = re.sub(r'NOTION_API_KEY=.*', f'NOTION_API_KEY={notion_key_input}', env_content)
-                    ENV_FILE.write_text(env_content)
-                    os.environ["NOTION_API_KEY"] = notion_key_input
-                    st.success("保存しました")
-                    st.rerun()
+                        st.warning("ページの内容が空です。")
 
     # Show Notion analysis result
     notion_data = st.session_state.get("notion_analyzed")
@@ -1470,12 +1453,13 @@ with tab_input:
             ("サービス名", "svc_name", "text", "例: SaaSプロダクト名"),
             ("サービスURL", "svc_url", "text", "例: https://example.com/service"),
             ("ターゲット", "svc_target", "text", "例: 大企業の研究開発部門"),
+            ("価格", "svc_price", "text", "例: 月額10,000円〜"),
+            ("数値データ", "svc_numbers", "text", "例: 23.5万人のDB、99.7%のコスト削減"),
+            ("提供開始日", "svc_launch", "text", "例: 2026年4月1日"),
             ("サービス概要", "svc_summary", "area", "何ができるサービスか、1〜2文で"),
             ("背景・課題", "svc_bg", "area", "なぜ今これが必要か。箇条書きでもOK"),
             ("主な特徴", "svc_features", "area", "3つ程度、箇条書きで"),
             ("差別化ポイント", "svc_diff", "area", "競合との違い、数値があれば"),
-            ("数値データ", "svc_numbers", "text", "例: 23.5万人のデータベース、99.7%のコスト削減"),
-            ("価格", "svc_price", "text", ""),
             ("代表コメント", "svc_comment", "area", ""),
             ("今後の展望", "svc_future", "area", ""),
         ],
@@ -1492,8 +1476,9 @@ with tab_input:
         "funding": [
             ("ラウンド", "fund_round", "text", "例: シード、シリーズA"),
             ("調達金額", "fund_amount", "text", "例: 1億円"),
-            ("投資家", "fund_investors", "area", "1行1社で"),
             ("リードインベスター", "fund_lead", "text", ""),
+            ("調達日", "fund_date", "text", "例: 2026年4月"),
+            ("投資家", "fund_investors", "area", "1行1社で"),
             ("資金使途", "fund_purpose", "area", ""),
             ("事業概要", "fund_biz", "area", "現在の事業内容・実績"),
             ("市場背景", "fund_market", "area", ""),
@@ -1505,11 +1490,12 @@ with tab_input:
             ("開催日時", "evt_date", "text", ""),
             ("開催場所", "evt_venue", "text", ""),
             ("対象者", "evt_target", "text", ""),
-            ("イベント概要", "evt_summary", "area", ""),
-            ("プログラム・登壇者", "evt_program", "area", ""),
             ("定員", "evt_capacity", "text", ""),
             ("参加費", "evt_price", "text", ""),
             ("申込URL", "evt_url", "text", ""),
+            ("主催者", "evt_organizer", "text", ""),
+            ("イベント概要", "evt_summary", "area", ""),
+            ("プログラム・登壇者", "evt_program", "area", ""),
         ],
         "update": [
             ("サービス名", "upd_name", "text", ""),
@@ -1543,10 +1529,24 @@ with tab_input:
             notion_val = _nv(label)
             st.session_state[key] = notion_val  # overwrite even if empty
 
-    for label, key, field_type, placeholder in fields:
-        if field_type == "text":
-            field_values[label] = st.text_input(label, key=key, placeholder=placeholder)
-        else:
+    # Render fields in 2-column layout for text inputs, full-width for text areas
+    text_fields = [(l, k, t, p) for l, k, t, p in fields if t == "text"]
+    area_fields = [(l, k, t, p) for l, k, t, p in fields if t == "area"]
+
+    # Text inputs in 2 columns
+    if text_fields:
+        for i in range(0, len(text_fields), 2):
+            cols = st.columns(2)
+            for j, col in enumerate(cols):
+                idx = i + j
+                if idx < len(text_fields):
+                    label, key, _, placeholder = text_fields[idx]
+                    with col:
+                        field_values[label] = st.text_input(label, key=key, placeholder=placeholder)
+
+    # Text areas full-width
+    if area_fields:
+        for label, key, _, placeholder in area_fields:
             field_values[label] = st.text_area(label, key=key, height=80, placeholder=placeholder)
 
     # Build user_input from field values
