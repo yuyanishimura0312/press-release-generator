@@ -6,6 +6,7 @@ __pycache__/
 profiles/
 *.md
 !README.md
+!prtimes-best-practices-report.md
 output/
 notion_content.json
 .streamlit/
