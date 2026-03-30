@@ -1010,148 +1010,30 @@ with tab_input:
             st.rerun()
 
     st.divider()
-    st.caption("簡潔に要点だけ入力してください。AIが自動的にプレスリリースの文体・構成に仕上げます。")
 
-    # --- Release-type-specific minimal input ---
-    if release_type == "service":
-        st.subheader("基本情報")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            svc_name = st.text_input("サービス/プロダクト名 *", key="svc_name")
-        with col_b:
-            svc_url = st.text_input("サービスURL", key="svc_url")
-        svc_target = st.text_input("ターゲット（誰向けか） *", key="svc_target",
-                                    placeholder="例: 大企業の研究開発部門")
-        svc_oneliner = st.text_input("一言で何ができるサービスか *", key="svc_oneliner",
-                                      placeholder="例: AIを活用して最適な研究者を探索できるサービス")
+    # -- Unified input area (auto-filled from Notion or manual) --
+    input_placeholder = {
+        "service": "サービス名: ANSWER法人版\nサービスURL: https://answer.esse-sense.com\nターゲット: 大企業の研究開発部門\nサービス概要: AIを活用した研究者探索システム\n背景: 適切な研究者を見つけるのに数ヶ月かかっていた\n特徴:\n- リスト化機能による一覧性の向上\n- 検索ワードの秘匿性\n- AI分析機能との連携\n数値: 23.5万人のデータベース",
+        "partnership": "提携先: 〇〇株式会社\n提携の種類: 業務提携\n目的: 研究者ネットワークを活用した新規事業開発\n内容: 共同でサービスを開発・提供",
+        "funding": "ラウンド: シリーズA\n調達金額: 〇億円\n投資家:\n- 〇〇キャピタル\n- 〇〇ファンド\n資金使途: プロダクト開発、採用強化",
+        "event": "イベント名: esse-sense Future Forum 2026\n日時: 2026年7月\n会場: 東京\n概要: 研究者とビジネスをつなぐ招待制カンファレンス",
+        "update": "サービス名: ANSWER\nアップデート概要: 法人版の提供開始\n変更点:\n- リスト化機能\n- チーム共有機能\n- ダウンロード機能",
+        "award": "受賞名: 〇〇賞\n授与機関: 〇〇\n受賞日: 2026年〇月\n受賞理由: ...",
+    }
 
-        st.subheader("詳細（わかる範囲で）")
-        svc_background = st.text_area("なぜ今これが必要か（背景・課題）", key="svc_bg", height=100,
-                                       placeholder="箇条書きでもOK。AIが文章化します")
-        svc_features = st.text_area("主な特徴・機能", key="svc_feat", height=100,
-                                     placeholder="箇条書きで3つ程度")
-        svc_numbers = st.text_input("アピールできる数値", key="svc_num",
-                                     placeholder="例: 23万人のデータベース、99%のコスト削減")
-        svc_price = st.text_input("価格・料金", key="svc_price")
-        svc_extra = st.text_area("その他伝えたいこと", key="svc_extra", height=80)
+    # If Notion data exists, use it as default value
+    default_input = notion_prefill if notion_prefill else ""
 
-        user_input = f"""サービス名: {svc_name}
-サービスURL: {svc_url}
-ターゲット: {svc_target}
-サービス概要: {svc_oneliner}
-背景・課題: {svc_background}
-主な特徴: {svc_features}
-数値データ: {svc_numbers}
-価格: {svc_price}
-その他: {svc_extra}"""
-        can_generate = bool(svc_name and svc_target and svc_oneliner)
+    user_input = st.text_area(
+        "リリース情報（Notionから自動入力、または手動で記入）",
+        value=default_input,
+        height=300,
+        placeholder=input_placeholder.get(release_type, "リリースに関する情報を自由に記入してください"),
+        help="箇条書き・メモ書きでOK。AIがプレスリリースの文体に仕上げます。",
+        key="user_input_area",
+    )
 
-    elif release_type == "partnership":
-        col_a, col_b = st.columns(2)
-        with col_a:
-            ptr_name = st.text_input("提携先企業名 *", key="ptr_name")
-        with col_b:
-            ptr_type = st.text_input("提携の種類 *", key="ptr_type",
-                                      placeholder="例: 業務提携、共同研究")
-        ptr_purpose = st.text_area("提携の目的（何を一緒にやるか） *", key="ptr_purpose", height=100)
-        ptr_detail = st.text_area("具体的な内容", key="ptr_detail", height=100,
-                                   placeholder="箇条書きでもOK")
-        ptr_extra = st.text_area("その他（提携先の特徴、期待する効果など）", key="ptr_extra", height=80)
-
-        user_input = f"""提携先: {ptr_name}
-提携の種類: {ptr_type}
-目的: {ptr_purpose}
-具体的な内容: {ptr_detail}
-その他: {ptr_extra}"""
-        can_generate = bool(ptr_name and ptr_type and ptr_purpose)
-
-    elif release_type == "funding":
-        col_a, col_b = st.columns(2)
-        with col_a:
-            fund_round = st.text_input("ラウンド *", key="fund_round",
-                                        placeholder="例: シード、プレシリーズA")
-        with col_b:
-            fund_amount = st.text_input("調達金額 *", key="fund_amount",
-                                         placeholder="例: 1億円")
-        fund_investors = st.text_area("投資家（1行1社） *", key="fund_inv", height=80)
-        fund_purpose = st.text_area("資金の使い道 *", key="fund_purpose", height=100)
-        fund_extra = st.text_area("その他（事業の実績、今後の戦略など）", key="fund_extra", height=100)
-
-        user_input = f"""ラウンド: {fund_round}
-調達金額: {fund_amount}
-投資家: {fund_investors}
-資金使途: {fund_purpose}
-その他: {fund_extra}"""
-        can_generate = bool(fund_round and fund_amount and fund_investors and fund_purpose)
-
-    elif release_type == "event":
-        evt_name = st.text_input("イベント名 *", key="evt_name")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            evt_date = st.text_input("開催日時 *", key="evt_date")
-        with col_b:
-            evt_venue = st.text_input("開催場所 *", key="evt_venue")
-        evt_target = st.text_input("対象者 *", key="evt_target")
-        evt_summary = st.text_area("イベント概要 *", key="evt_summary", height=100)
-        evt_program = st.text_area("プログラム・登壇者", key="evt_prog", height=100,
-                                    placeholder="箇条書きでOK")
-        col_c, col_d = st.columns(2)
-        with col_c:
-            evt_capacity = st.text_input("定員", key="evt_cap")
-        with col_d:
-            evt_price = st.text_input("参加費", key="evt_price")
-        evt_url = st.text_input("申込URL", key="evt_url")
-
-        user_input = f"""イベント名: {evt_name}
-日時: {evt_date}
-会場: {evt_venue}
-対象者: {evt_target}
-概要: {evt_summary}
-プログラム: {evt_program}
-定員: {evt_capacity}
-参加費: {evt_price}
-申込URL: {evt_url}"""
-        can_generate = bool(evt_name and evt_date and evt_venue and evt_summary)
-
-    elif release_type == "update":
-        col_a, col_b = st.columns(2)
-        with col_a:
-            upd_name = st.text_input("サービス/プロダクト名 *", key="upd_name")
-        with col_b:
-            upd_url = st.text_input("サービスURL", key="upd_url")
-        upd_summary = st.text_input("アップデート概要（一言で） *", key="upd_summary")
-        upd_details = st.text_area("主な変更点 *", key="upd_detail", height=100,
-                                    placeholder="箇条書きで")
-        upd_why = st.text_area("アップデートの背景", key="upd_why", height=80)
-        upd_extra = st.text_area("その他", key="upd_extra", height=80)
-
-        user_input = f"""サービス名: {upd_name}
-サービスURL: {upd_url}
-アップデート概要: {upd_summary}
-変更点: {upd_details}
-背景: {upd_why}
-その他: {upd_extra}"""
-        can_generate = bool(upd_name and upd_summary and upd_details)
-
-    elif release_type == "award":
-        awd_name = st.text_input("受賞/認定名 *", key="awd_name")
-        awd_body = st.text_input("授与機関/主催者 *", key="awd_body")
-        awd_date = st.text_input("受賞/認定日 *", key="awd_date")
-        awd_reason = st.text_area("受賞理由 *", key="awd_reason", height=100)
-        awd_extra = st.text_area("その他（対象サービス、意義など）", key="awd_extra", height=100)
-
-        user_input = f"""受賞名: {awd_name}
-授与機関: {awd_body}
-受賞日: {awd_date}
-受賞理由: {awd_reason}
-その他: {awd_extra}"""
-        can_generate = bool(awd_name and awd_body and awd_date and awd_reason)
-
-    # Append Notion analyzed content to user_input
-    if notion_prefill:
-        user_input += f"\n\n【Notionページから取得した詳細情報】\n{notion_prefill}"
-        # If Notion data exists, allow generation even with fewer manual fields
-        can_generate = True
+    can_generate = bool(user_input.strip())
 
     # -- Generate button --
     st.divider()
@@ -1173,7 +1055,22 @@ with tab_input:
 
     missing_company = not all([company_name, representative, location])
     if missing_company:
-        st.warning("会社情報タブで会社名・代表者名・所在地を入力してください。")
+        st.warning("サイドバーでプロフィール「esse-sense」を選択するか、会社情報タブで入力してください。")
+
+    # Load past press release references if available
+    REFERENCES_FILE = Path(__file__).parent / "past_releases.json"
+    past_releases_context = ""
+    if REFERENCES_FILE.exists():
+        try:
+            past = json.loads(REFERENCES_FILE.read_text())
+            # Find matching release type examples
+            matching = [r for r in past if r.get("type") == release_type]
+            if not matching:
+                matching = past[:2]  # fallback to first 2
+            for ref in matching[:2]:
+                past_releases_context += f"\n\n【参考: 過去のプレスリリース「{ref.get('title', '')}」】\n{ref.get('body', '')[:2000]}"
+        except Exception:
+            pass
 
     col_gen1, col_gen2 = st.columns([1, 1])
     with col_gen1:
@@ -1194,16 +1091,19 @@ with tab_input:
             regenerate_clicked = False
 
     if generate_clicked or regenerate_clicked:
-        with st.spinner("AIがプレスリリースを生成中...（20〜30秒）"):
-            result = generate_press_release_ai(release_type, common, user_input)
+        # Append past release references to user input for AI context
+        full_input = user_input
+        if past_releases_context:
+            full_input += past_releases_context
+        with st.spinner("AIがプレスリリースを生成中..."):
+            result = generate_press_release_ai(release_type, common, full_input)
             st.session_state["press_release_result"] = result
 
-    # -- Display result --
+    # -- Display result with styled preview --
     if "press_release_result" in st.session_state:
         result = st.session_state["press_release_result"]
 
         st.divider()
-        st.header("生成結果")
 
         view_mode = st.radio(
             "表示モード",
@@ -1213,8 +1113,112 @@ with tab_input:
         )
 
         if view_mode == "プレビュー":
-            with st.container(border=True):
-                st.markdown(result)
+            # Styled preview with esse-sense / Miratsuku design tone
+            st.markdown("""
+            <link href="https://fonts.googleapis.com/css2?family=M+PLUS+1p:wght@300;400;500;700&display=swap" rel="stylesheet">
+            <style>
+            .pr-preview {
+                font-family: 'M PLUS 1p', 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 48px 52px;
+                background: #FFFFF0;
+                border: 1px solid #d4cfc8;
+                border-radius: 2px;
+                line-height: 1.9;
+                color: #333333;
+                box-shadow: 0 2px 12px rgba(120, 60, 40, 0.06);
+            }
+            .pr-preview h1 {
+                font-size: 1.5rem;
+                font-weight: 700;
+                color: #783C28;
+                border-bottom: 2px solid #A0503C;
+                padding-bottom: 14px;
+                margin-bottom: 8px;
+                line-height: 1.5;
+            }
+            .pr-preview h2 {
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: #A0503C;
+                margin-top: 36px;
+                margin-bottom: 12px;
+                padding-left: 14px;
+                border-left: 3px solid #D3836F;
+            }
+            .pr-preview p {
+                margin-bottom: 16px;
+                text-align: justify;
+            }
+            .pr-preview strong {
+                color: #783C28;
+            }
+            .pr-preview hr {
+                border: none;
+                border-top: 1px solid #F0DCC8;
+                margin: 36px 0;
+            }
+            .pr-preview table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 16px 0;
+                font-size: 0.9rem;
+            }
+            .pr-preview th, .pr-preview td {
+                border: 1px solid #F0DCC8;
+                padding: 10px 14px;
+                text-align: left;
+            }
+            .pr-preview th {
+                background: #FAC8A0;
+                font-weight: 600;
+                color: #783C28;
+                width: 120px;
+            }
+            .pr-preview ul, .pr-preview ol {
+                padding-left: 24px;
+                margin-bottom: 16px;
+            }
+            .pr-preview li {
+                margin-bottom: 4px;
+            }
+            .pr-preview blockquote {
+                border-left: 3px solid #D3836F;
+                padding: 16px 24px;
+                margin: 20px 0;
+                background: #FDF6F0;
+                color: #4a4a4a;
+                font-style: normal;
+                border-radius: 0 4px 4px 0;
+            }
+            .pr-label {
+                display: inline-block;
+                background: #783C28;
+                color: #FFFFF0;
+                font-size: 0.7rem;
+                padding: 3px 14px;
+                border-radius: 2px;
+                margin-bottom: 20px;
+                letter-spacing: 0.15em;
+                font-weight: 500;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+
+            # Convert markdown to styled HTML
+            import markdown
+            html_body = markdown.markdown(
+                result,
+                extensions=["tables", "fenced_code"],
+            )
+            st.markdown(
+                f'<div class="pr-preview">'
+                f'<span class="pr-label">PRESS RELEASE</span>'
+                f'{html_body}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
         elif view_mode == "Markdown":
             st.code(result, language="markdown")
         else:
@@ -1241,8 +1245,32 @@ with tab_input:
                 use_container_width=True,
             )
 
-        st.caption("PR Timesへの入稿時の注意: 画像を3〜5枚以上準備してください（トップ画像はSNSサムネイルに使用されます）")
+        st.caption("PR Timesへの入稿時: 画像を3〜5枚以上準備してください（トップ画像はSNSサムネイルに使用されます）")
 
 # -- Footer --
+st.markdown("""
+<style>
+    .stApp { background-color: #FFFFF0; }
+    section[data-testid="stSidebar"] { background-color: #f5efe8; }
+    h1 { color: #1a1a1a !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        padding: 8px 24px;
+        font-weight: 500;
+    }
+    .stTabs [aria-selected="true"] {
+        border-bottom-color: #783C28 !important;
+        color: #783C28 !important;
+    }
+    div[data-testid="stButton"] button[kind="primary"] {
+        background-color: #783C28;
+        border-color: #783C28;
+    }
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background-color: #A0503C;
+        border-color: #A0503C;
+    }
+</style>
+""", unsafe_allow_html=True)
 st.divider()
-st.caption("PR Times プレスリリース自動生成ツール | esse-sense形式ベース | Claude AI搭載")
+st.caption("PR Times Press Release Generator | esse-sense format | Powered by Claude AI")

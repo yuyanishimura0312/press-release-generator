@@ -2,3 +2,4 @@ streamlit>=1.30.0
 anthropic>=0.80.0
 beautifulsoup4>=4.12.0
 requests>=2.30.0
+markdown>=3.5.0
