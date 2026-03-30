@@ -173,8 +173,45 @@ def read_notion_page(url_or_id: str, api_key: str) -> dict:
     return {"title": title, "content": content, "page_id": page_id}
 
 
-def analyze_notion_content_with_ai(title: str, content: str, release_type: str) -> dict:
-    """Use AI to analyze Notion page content and extract release info."""
+def identify_company_from_notion(title: str, content: str) -> dict:
+    """Use AI to identify the company from Notion content and find its website."""
+    client = get_anthropic_client()
+
+    prompt = f"""以下はNotionページから取得した、プレスリリースの素材情報です。
+この内容から、プレスリリースを発行する会社を特定してください。
+
+【ページタイトル】
+{title}
+
+【ページ内容】
+{content[:4000]}
+
+---
+
+以下のJSON形式で返してください:
+{{
+  "company_name": "会社名（正式名称。株式会社を含む）",
+  "company_name_short": "略称やサービスブランド名",
+  "company_url": "会社のウェブサイトURL（推測でもOK）",
+  "release_type_suggestion": "service/partnership/funding/event/update/award のいずれか最も適切なもの"
+}}
+
+JSONのみを返してください。"""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = response.content[0].text.strip()
+    json_match = re.search(r'\{[\s\S]*\}', text)
+    if json_match:
+        return json.loads(json_match.group())
+    return {}
+
+
+def analyze_notion_full(title: str, content: str, release_type: str) -> dict:
+    """Analyze Notion content: extract release info AND company info in one call."""
     client = get_anthropic_client()
 
     type_fields = {
@@ -187,7 +224,7 @@ def analyze_notion_content_with_ai(title: str, content: str, release_type: str) 
     }
 
     prompt = f"""以下はNotionページから取得した、プレスリリースの素材情報です。
-この内容を分析して、「{RELEASE_TYPES[release_type]}」のプレスリリースに必要な情報を抽出してください。
+この内容を分析して、2つのことを行ってください。
 
 【ページタイトル】
 {title}
@@ -197,23 +234,40 @@ def analyze_notion_content_with_ai(title: str, content: str, release_type: str) 
 
 ---
 
-以下の情報を抽出し、整理してテキストで返してください:
+■ タスク1: プレスリリースを発行する会社の特定
+内容から会社名とウェブサイトURLを特定してください。
+
+■ タスク2: 「{RELEASE_TYPES[release_type]}」のプレスリリースに必要な情報を抽出
+以下の項目を抽出してください:
 {type_fields.get(release_type, '')}
 
+---
+
+以下のJSON形式で返してください:
+{{
+  "company": {{
+    "company_name": "会社名（正式名称）",
+    "company_name_short": "略称やブランド名",
+    "company_url": "会社のウェブサイトURL（わかれば）"
+  }},
+  "release_info": "抽出した情報をテキストで整理（項目名: 値 の形式で改行区切り）",
+  "release_type_suggestion": "service/partnership/funding/event/update/award のいずれか最も適切なもの"
+}}
+
 見つからない情報は「（情報なし）」としてください。
-箇条書きではなく「項目名: 値」の形式で返してください。
-ページの内容を最大限活用し、プレスリリースに使える情報を漏れなく抽出してください。"""
+ページの内容を最大限活用し、プレスリリースに使える情報を漏れなく抽出してください。
+JSONのみを返してください。"""
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}],
     )
-    return {
-        "analyzed_text": response.content[0].text.strip(),
-        "raw_content": content,
-        "title": title,
-    }
+    text = response.content[0].text.strip()
+    json_match = re.search(r'\{[\s\S]*\}', text)
+    if json_match:
+        return json.loads(json_match.group())
+    return {}
 
 
 # -- Web scraping for company info --
@@ -795,9 +849,89 @@ with tab_input:
             key="notion_url",
         )
 
+        def _run_notion_analysis(page_data: dict):
+            """Notionデータを解析し、会社情報も自動取得する共通処理。"""
+            title = page_data["title"]
+            content = page_data["content"]
+            st.success(f"「{title}」を読み取りました（{len(content)}文字）")
+
+            with st.spinner("AIで内容を解析中...（会社特定＋リリース情報抽出）"):
+                try:
+                    result = analyze_notion_full(title, content, release_type)
+                except Exception as e:
+                    st.error(f"AI解析エラー: {e}")
+                    return
+
+            if not result:
+                st.error("解析結果を取得できませんでした")
+                return
+
+            # Save release info
+            st.session_state["notion_analyzed"] = {
+                "analyzed_text": result.get("release_info", ""),
+                "raw_content": content,
+                "title": title,
+            }
+
+            # Auto-detect company and scrape website
+            company_info = result.get("company", {})
+            company_url_detected = company_info.get("company_url", "")
+
+            if company_url_detected:
+                with st.spinner(f"会社情報を自動取得中... ({company_url_detected})"):
+                    try:
+                        scraped = scrape_company_info(company_url_detected)
+                        if scraped["success"]:
+                            extracted = extract_company_with_ai(scraped["text"], company_url_detected)
+                            if extracted:
+                                st.session_state["extracted_company"] = extracted
+                        else:
+                            # Scraping failed, use AI-detected info as fallback
+                            st.session_state["extracted_company"] = {
+                                "company_name": company_info.get("company_name", ""),
+                                "url": company_url_detected,
+                            }
+                    except Exception:
+                        st.session_state["extracted_company"] = {
+                            "company_name": company_info.get("company_name", ""),
+                            "url": company_url_detected,
+                        }
+            elif company_info.get("company_name"):
+                # No URL but have company name - try web search
+                search_name = company_info["company_name"]
+                with st.spinner(f"「{search_name}」のウェブサイトを検索中..."):
+                    try:
+                        scraped = scrape_company_info(f"https://www.google.com/search?q={search_name}+会社概要")
+                        if scraped["success"]:
+                            # Extract URL from search results
+                            client = get_anthropic_client()
+                            resp = client.messages.create(
+                                model="claude-sonnet-4-20250514",
+                                max_tokens=200,
+                                messages=[{"role": "user", "content": f"以下の検索結果から「{search_name}」の公式ウェブサイトURLを1つだけ返してください。URLのみ返してください。\n\n{scraped['text'][:3000]}"}],
+                            )
+                            found_url = resp.content[0].text.strip()
+                            if found_url.startswith("http"):
+                                scraped2 = scrape_company_info(found_url)
+                                if scraped2["success"]:
+                                    extracted = extract_company_with_ai(scraped2["text"], found_url)
+                                    if extracted:
+                                        st.session_state["extracted_company"] = extracted
+                    except Exception:
+                        st.session_state["extracted_company"] = {
+                            "company_name": search_name,
+                        }
+
+            # Suggest release type
+            suggested = result.get("release_type_suggestion", "")
+            if suggested and suggested != release_type:
+                st.info(f"AIの提案: このNotionの内容は「{RELEASE_TYPES.get(suggested, suggested)}」に最適です。サイドバーで変更できます。")
+
+            st.rerun()
+
+        # -- Fetch buttons --
         if fetch_method == "api":
-            # Direct API method
-            if st.button("Notionから読み込む", use_container_width=True):
+            if st.button("Notionから自動読み込み", type="primary", use_container_width=True):
                 if notion_url:
                     with st.spinner("Notionページを読み取り中..."):
                         try:
@@ -805,24 +939,11 @@ with tab_input:
                         except Exception as e:
                             page_data = None
                             st.error(f"Notion読み取りエラー: {e}")
-
                     if page_data and page_data.get("content"):
-                        st.success(f"「{page_data['title']}」を読み取りました（{len(page_data['content'])}文字）")
-                        with st.spinner("AIで内容を解析中..."):
-                            try:
-                                analyzed = analyze_notion_content_with_ai(
-                                    page_data["title"],
-                                    page_data["content"],
-                                    release_type,
-                                )
-                                st.session_state["notion_analyzed"] = analyzed
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"AI解析エラー: {e}")
+                        _run_notion_analysis(page_data)
                     elif page_data:
                         st.warning("ページの内容が空です。インテグレーションがページに接続されているか確認してください。")
         else:
-            # CLI bridge method (uses Claude Code's MCP connection)
             col_fetch1, col_fetch2 = st.columns([2, 1])
             with col_fetch1:
                 if st.button("Notionから読み込む（CLI経由）", use_container_width=True):
@@ -830,7 +951,7 @@ with tab_input:
                         with st.spinner("Claude CLI経由でNotionページを読み取り中...（30〜60秒）"):
                             import subprocess
                             try:
-                                result = subprocess.run(
+                                sub_result = subprocess.run(
                                     [str(FETCH_SCRIPT), notion_url],
                                     capture_output=True, text=True, timeout=120,
                                     cwd=str(Path(__file__).parent),
@@ -838,41 +959,24 @@ with tab_input:
                                 if NOTION_CONTENT_FILE.exists():
                                     page_data = json.loads(NOTION_CONTENT_FILE.read_text())
                                     if page_data.get("content"):
-                                        st.success(f"「{page_data['title']}」を読み取りました（{len(page_data['content'])}文字）")
-                                        with st.spinner("AIで内容を解析中..."):
-                                            analyzed = analyze_notion_content_with_ai(
-                                                page_data["title"],
-                                                page_data["content"],
-                                                release_type,
-                                            )
-                                            st.session_state["notion_analyzed"] = analyzed
-                                            st.rerun()
+                                        _run_notion_analysis(page_data)
                                     else:
                                         st.warning("ページの内容が空です")
                                 else:
-                                    st.error(f"読み取りに失敗しました\n{result.stderr}")
+                                    st.error(f"読み取りに失敗しました\n{sub_result.stderr}")
                             except subprocess.TimeoutExpired:
                                 st.error("タイムアウトしました。もう一度お試しください。")
                             except Exception as e:
                                 st.error(f"エラー: {e}")
             with col_fetch2:
-                # Also allow loading from previously fetched file
                 if NOTION_CONTENT_FILE.exists():
                     if st.button("前回のデータを使用", use_container_width=True):
                         page_data = json.loads(NOTION_CONTENT_FILE.read_text())
                         if page_data.get("content"):
-                            with st.spinner("AIで内容を解析中..."):
-                                analyzed = analyze_notion_content_with_ai(
-                                    page_data["title"],
-                                    page_data["content"],
-                                    release_type,
-                                )
-                                st.session_state["notion_analyzed"] = analyzed
-                                st.rerun()
+                            _run_notion_analysis(page_data)
 
             st.caption("Notion APIキーが未設定のため、Claude CLIのMCP接続を利用します。")
 
-            # Optional: API key setup
             with st.popover("Notion APIキーを設定（高速化）"):
                 st.caption(
                     "APIキーを設定すると直接APIアクセスで高速になります。\n\n"
@@ -895,12 +999,14 @@ with tab_input:
     notion_data = st.session_state.get("notion_analyzed")
     notion_prefill = ""
     if notion_data:
-        st.success(f"Notionページ「{notion_data['title']}」の内容を解析済み")
+        st.success(f"Notionページ「{notion_data.get('title', '')}」の内容を解析済み。会社情報も自動取得しました。")
         with st.expander("解析結果を確認", expanded=False):
-            st.text(notion_data["analyzed_text"])
-        notion_prefill = notion_data["analyzed_text"]
+            st.text(notion_data.get("analyzed_text", ""))
+        notion_prefill = notion_data.get("analyzed_text", "")
         if st.button("Notion解析データをクリア", key="clear_notion"):
             del st.session_state["notion_analyzed"]
+            if "extracted_company" in st.session_state:
+                del st.session_state["extracted_company"]
             st.rerun()
 
     st.divider()
