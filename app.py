@@ -1012,21 +1012,48 @@ with tab_input:
     st.divider()
 
     # -- Parse notion_prefill into field values --
-    def _parse_field(text: str, key: str) -> str:
-        """Extract a field value from 'key: value' formatted text."""
-        for line in text.split("\n"):
-            if line.strip().startswith(key):
-                val = line.split(":", 1)[-1].strip() if ":" in line else ""
-                if val == "（情報なし）":
-                    return ""
-                return val
-        return ""
+    def _parse_all_fields(text: str) -> dict:
+        """Parse 'key: value' formatted text into a dict. Handles multiline values."""
+        result = {}
+        if not text:
+            return result
+        lines = text.split("\n")
+        current_key = None
+        current_val = []
+        for line in lines:
+            # Check if this line starts a new "key: value" pair
+            if ":" in line and not line.startswith(" ") and not line.startswith("-") and not line.startswith("　"):
+                # Save previous key
+                if current_key:
+                    val = "\n".join(current_val).strip()
+                    if val and val != "（情報なし）":
+                        result[current_key] = val
+                parts = line.split(":", 1)
+                current_key = parts[0].strip()
+                current_val = [parts[1].strip()] if len(parts) > 1 else []
+            elif current_key:
+                current_val.append(line)
+        # Save last key
+        if current_key:
+            val = "\n".join(current_val).strip()
+            if val and val != "（情報なし）":
+                result[current_key] = val
+        return result
+
+    _notion_fields = _parse_all_fields(notion_prefill)
 
     def _nv(key: str) -> str:
-        """Get Notion-parsed value for a field."""
-        if not notion_prefill:
+        """Get Notion-parsed value. Tries exact match first, then partial match."""
+        if not _notion_fields:
             return ""
-        return _parse_field(notion_prefill, key)
+        # Exact match
+        if key in _notion_fields:
+            return _notion_fields[key]
+        # Partial match (e.g. "サービス名" matches "サービス名/プロダクト名")
+        for k, v in _notion_fields.items():
+            if key in k or k in key:
+                return v
+        return ""
 
     # -- Structured input fields per release type --
     FIELD_DEFS = {
@@ -1195,93 +1222,107 @@ with tab_input:
         if view_mode == "プレビュー":
             # Styled preview with esse-sense / Miratsuku design tone
             st.markdown("""
-            <link href="https://fonts.googleapis.com/css2?family=M+PLUS+1p:wght@300;400;500;700&display=swap" rel="stylesheet">
             <style>
             .pr-preview {
-                font-family: 'M PLUS 1p', 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
-                max-width: 800px;
+                font-family: 'Noto Sans JP', 'Inter', -apple-system, sans-serif;
+                max-width: 780px;
                 margin: 0 auto;
-                padding: 48px 52px;
-                background: #FFFFF0;
-                border: 1px solid #d4cfc8;
-                border-radius: 2px;
+                padding: 52px 56px;
+                background: #FFFFFF;
+                border: 1px solid #E8E2DC;
+                border-radius: 12px;
                 line-height: 1.9;
-                color: #333333;
-                box-shadow: 0 2px 12px rgba(120, 60, 40, 0.06);
+                color: #1A1A1A;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 6px 24px rgba(120, 60, 40, 0.06);
             }
             .pr-preview h1 {
-                font-size: 1.5rem;
+                font-size: 1.45rem;
                 font-weight: 700;
-                color: #783C28;
-                border-bottom: 2px solid #A0503C;
-                padding-bottom: 14px;
+                color: #1A1A1A;
+                border-bottom: 2px solid #783C28;
+                padding-bottom: 16px;
                 margin-bottom: 8px;
-                line-height: 1.5;
+                line-height: 1.55;
+                letter-spacing: -0.01em;
             }
             .pr-preview h2 {
-                font-size: 1.1rem;
+                font-size: 1.05rem;
                 font-weight: 600;
-                color: #A0503C;
-                margin-top: 36px;
-                margin-bottom: 12px;
-                padding-left: 14px;
+                color: #783C28;
+                margin-top: 40px;
+                margin-bottom: 14px;
+                padding-left: 16px;
                 border-left: 3px solid #D3836F;
+                letter-spacing: 0.01em;
             }
             .pr-preview p {
-                margin-bottom: 16px;
+                margin-bottom: 18px;
                 text-align: justify;
+                color: #333;
+                font-size: 0.95rem;
             }
             .pr-preview strong {
-                color: #783C28;
+                color: #1A1A1A;
+                font-weight: 600;
             }
             .pr-preview hr {
                 border: none;
-                border-top: 1px solid #F0DCC8;
-                margin: 36px 0;
+                border-top: 1px solid #F0EBE5;
+                margin: 40px 0;
             }
             .pr-preview table {
                 width: 100%;
                 border-collapse: collapse;
-                margin: 16px 0;
-                font-size: 0.9rem;
+                margin: 20px 0;
+                font-size: 0.875rem;
+                border-radius: 8px;
+                overflow: hidden;
             }
             .pr-preview th, .pr-preview td {
-                border: 1px solid #F0DCC8;
-                padding: 10px 14px;
+                border: 1px solid #E8E2DC;
+                padding: 11px 16px;
                 text-align: left;
             }
             .pr-preview th {
-                background: #FAC8A0;
+                background: #F7F2ED;
                 font-weight: 600;
                 color: #783C28;
-                width: 120px;
+                width: 110px;
+                font-size: 0.8125rem;
+            }
+            .pr-preview td {
+                background: #FFFFFF;
             }
             .pr-preview ul, .pr-preview ol {
                 padding-left: 24px;
-                margin-bottom: 16px;
+                margin-bottom: 18px;
             }
             .pr-preview li {
-                margin-bottom: 4px;
+                margin-bottom: 6px;
+                font-size: 0.95rem;
+                color: #333;
             }
             .pr-preview blockquote {
                 border-left: 3px solid #D3836F;
-                padding: 16px 24px;
-                margin: 20px 0;
-                background: #FDF6F0;
+                padding: 18px 28px;
+                margin: 24px 0;
+                background: #FDFAF7;
                 color: #4a4a4a;
                 font-style: normal;
-                border-radius: 0 4px 4px 0;
+                border-radius: 0 8px 8px 0;
+                font-size: 0.95rem;
             }
             .pr-label {
                 display: inline-block;
                 background: #783C28;
-                color: #FFFFF0;
-                font-size: 0.7rem;
-                padding: 3px 14px;
-                border-radius: 2px;
-                margin-bottom: 20px;
-                letter-spacing: 0.15em;
-                font-weight: 500;
+                color: #FDFAF7;
+                font-size: 0.6875rem;
+                padding: 4px 16px;
+                border-radius: 4px;
+                margin-bottom: 24px;
+                letter-spacing: 0.18em;
+                font-weight: 600;
+                text-transform: uppercase;
             }
             </style>
             """, unsafe_allow_html=True)
@@ -1330,26 +1371,124 @@ with tab_input:
 # -- Footer --
 st.markdown("""
 <style>
-    .stApp { background-color: #FFFFF0; }
-    section[data-testid="stSidebar"] { background-color: #f5efe8; }
-    h1 { color: #1a1a1a !important; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
+
+    /* -- Global -- */
+    .stApp {
+        background-color: #FDFAF7 !important;
+        font-family: 'Inter', 'Noto Sans JP', -apple-system, sans-serif !important;
+    }
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+
+    /* -- Sidebar -- */
+    section[data-testid="stSidebar"] {
+        background-color: #F7F2ED !important;
+        border-right: 1px solid #E8E2DC;
+    }
+
+    /* -- Typography -- */
+    h1 { color: #1A1A1A !important; font-weight: 700 !important; letter-spacing: -0.02em; }
+    h2, h3 { color: #783C28 !important; font-weight: 600 !important; }
+
+    /* -- Form Inputs -- */
+    .stTextInput > div > div > input,
+    .stTextArea > div > div > textarea {
+        border: 1px solid #E8E2DC !important;
+        border-radius: 8px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9375rem !important;
+        font-family: 'Inter', 'Noto Sans JP', sans-serif !important;
+        color: #1A1A1A !important;
+        background: #FFFFFF !important;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+    }
+    .stTextInput > div > div > input:focus,
+    .stTextArea > div > div > textarea:focus {
+        border-color: #A0503C !important;
+        box-shadow: 0 0 0 3px rgba(120, 60, 40, 0.08) !important;
+        outline: none !important;
+    }
+    .stTextInput label, .stTextArea label, .stSelectbox label {
+        font-size: 0.875rem !important;
+        font-weight: 500 !important;
+        color: #6B6560 !important;
+    }
+
+    /* -- Select boxes -- */
+    .stSelectbox > div > div {
+        border: 1px solid #E8E2DC !important;
+        border-radius: 8px !important;
+        background: #FFFFFF !important;
+    }
+
+    /* -- Buttons -- */
+    div[data-testid="stButton"] button[kind="primary"] {
+        background-color: #783C28 !important;
+        border: 1px solid #783C28 !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        font-family: 'Inter', 'Noto Sans JP', sans-serif !important;
+        transition: all 0.15s ease !important;
+        box-shadow: 0 1px 2px rgba(120, 60, 40, 0.08) !important;
+    }
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background-color: #8B4A34 !important;
+        border-color: #8B4A34 !important;
+        box-shadow: 0 2px 8px rgba(120, 60, 40, 0.15) !important;
+        transform: translateY(-1px);
+    }
+    div[data-testid="stButton"] button:not([kind="primary"]) {
+        background-color: #FFFFFF !important;
+        border: 1px solid #E8E2DC !important;
+        border-radius: 8px !important;
+        color: #6B6560 !important;
+        font-weight: 500 !important;
+        transition: all 0.15s ease !important;
+    }
+    div[data-testid="stButton"] button:not([kind="primary"]):hover {
+        border-color: #D4CFC8 !important;
+        background-color: #F7F2ED !important;
+    }
+
+    /* -- Tabs -- */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0;
+        border-bottom: 1px solid #E8E2DC;
+    }
     .stTabs [data-baseweb="tab"] {
-        padding: 8px 24px;
+        padding: 10px 24px;
         font-weight: 500;
+        color: #9C9590;
+        border-bottom: 2px solid transparent;
     }
     .stTabs [aria-selected="true"] {
         border-bottom-color: #783C28 !important;
         color: #783C28 !important;
+        font-weight: 600;
     }
-    div[data-testid="stButton"] button[kind="primary"] {
-        background-color: #783C28;
-        border-color: #783C28;
+
+    /* -- Expander -- */
+    .streamlit-expanderHeader {
+        font-weight: 500 !important;
+        color: #6B6560 !important;
     }
-    div[data-testid="stButton"] button[kind="primary"]:hover {
-        background-color: #A0503C;
-        border-color: #A0503C;
+
+    /* -- Dividers -- */
+    hr {
+        border-color: #F0EBE5 !important;
     }
+
+    /* -- Download buttons -- */
+    .stDownloadButton button {
+        border-radius: 8px !important;
+        border: 1px solid #E8E2DC !important;
+        font-weight: 500 !important;
+    }
+
+    /* -- Radio -- */
+    .stRadio > div { gap: 4px; }
+    .stRadio label { font-size: 0.875rem !important; }
 </style>
 """, unsafe_allow_html=True)
 st.divider()
