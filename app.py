@@ -1,6 +1,6 @@
 """
 Press Release Generator - Streamlit Web App
-AI-powered, PR Times optimized, esse-sense format based
+AI-powered, PR Times optimized press release generator
 
 Minimal input -> AI auto-generates full press release
 Company info auto-extracted from URL
@@ -21,9 +21,8 @@ import markdown as md_lib
 # -- Config --
 PROFILE_DIR = Path(__file__).parent / "profiles"
 PROFILE_DIR.mkdir(exist_ok=True)
-ENV_FILE = Path(__file__).parent / ".env"
 
-# Load secrets: Streamlit Cloud secrets > .env file > environment
+# Load secrets: Streamlit Cloud secrets > environment
 try:
     for key in ["ANTHROPIC_API_KEY", "NOTION_API_KEY"]:
         if hasattr(st, "secrets") and key in st.secrets:
@@ -31,12 +30,8 @@ try:
 except Exception:
     pass
 
-if ENV_FILE.exists():
-    for line in ENV_FILE.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip())
+# -- Usage limits per session --
+MAX_GENERATIONS_PER_SESSION = 10
 
 RELEASE_TYPES = {
     "service": "サービスリリース",
@@ -57,22 +52,27 @@ RELEASE_DESCRIPTIONS = {
 }
 
 
-# -- Profile helpers --
+# -- Profile helpers (session-based for multi-user safety) --
+
+def _init_session_profiles():
+    """Initialize session-based profile storage."""
+    if "user_profiles" not in st.session_state:
+        st.session_state["user_profiles"] = {}
+
 
 def list_profiles() -> list[str]:
-    return [p.stem for p in PROFILE_DIR.glob("*.json")]
+    _init_session_profiles()
+    return list(st.session_state["user_profiles"].keys())
 
 
 def load_profile(name: str) -> dict:
-    path = PROFILE_DIR / f"{name}.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    _init_session_profiles()
+    return st.session_state["user_profiles"].get(name, {})
 
 
 def save_profile(data: dict, name: str):
-    path = PROFILE_DIR / f"{name}.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    _init_session_profiles()
+    st.session_state["user_profiles"][name] = data
 
 
 # -- Notion page reader --
@@ -527,11 +527,25 @@ def scrape_company_info(url: str) -> dict:
 
 
 def get_anthropic_client() -> anthropic.Anthropic:
-    """Get Anthropic client with API key from env, .env file, or session state."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or st.session_state.get("api_key")
+    """Get Anthropic client with API key from server-side secrets."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise ValueError("APIキーが設定されていません")
+        raise ValueError("サービスが一時的に利用できません。管理者にお問い合わせください。")
     return anthropic.Anthropic(api_key=api_key)
+
+
+def _check_usage_limit() -> bool:
+    """Check if user has exceeded session generation limit."""
+    if "generation_count" not in st.session_state:
+        st.session_state["generation_count"] = 0
+    return st.session_state["generation_count"] < MAX_GENERATIONS_PER_SESSION
+
+
+def _increment_usage():
+    """Increment generation counter."""
+    if "generation_count" not in st.session_state:
+        st.session_state["generation_count"] = 0
+    st.session_state["generation_count"] += 1
 
 
 def extract_company_with_ai(scraped_text: str, url: str) -> dict:
@@ -711,7 +725,7 @@ def _get_format_guide(release_type: str, common: dict) -> str:
     company = common.get("company_name", "会社名")
 
     base = f"""あなたはPR Times向けプレスリリースの専門ライターです。
-PR TIMESの公式ガイドラインと実際の高反響プレスリリース事例を分析した結果に基づいて執筆してください。
+PR TIMESの公式ガイドラインと実際の高反響プレスリリース事例の分析に基づいて執筆してください。
 
 【基本原則】
 - メディア記者はプレスリリース1通あたり2〜3秒で記事候補かを判断する。ファーストビュー（タイトル＋冒頭文）が勝負
@@ -852,35 +866,22 @@ PR TIMESの公式ガイドラインと実際の高反響プレスリリース事
 # ============================
 
 st.set_page_config(
-    page_title="PR Times プレスリリース生成",
+    page_title="プレスリリース自動生成 | PR Times最適化",
     page_icon="PR",
     layout="wide",
 )
 
-st.title("PR Times プレスリリース自動生成")
-st.caption("AI自動生成 / esse-sense形式ベース / 最小入力で完成度の高いプレスリリースを作成")
+st.title("プレスリリース自動生成")
+st.caption("AI搭載 / PR Times最適化 / 最小入力で完成度の高いプレスリリースを作成")
+
+# -- Usage counter display --
+if "generation_count" not in st.session_state:
+    st.session_state["generation_count"] = 0
 
 # -- Sidebar --
 with st.sidebar:
-    # API Key setup
-    has_env_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if has_env_key:
-        st.success("APIキー: 設定済み")
-    else:
-        st.header("APIキー設定")
-        api_key_input = st.text_input(
-            "Anthropic APIキー",
-            type="password",
-            value=st.session_state.get("api_key", ""),
-            help="環境変数 ANTHROPIC_API_KEY またはプロジェクト内 .env ファイルでも設定可能",
-        )
-        if api_key_input:
-            st.session_state["api_key"] = api_key_input
-            # Save to .env for persistence
-            ENV_FILE.write_text(f"ANTHROPIC_API_KEY={api_key_input}\n")
-            os.environ["ANTHROPIC_API_KEY"] = api_key_input
-        else:
-            st.warning("AI機能を使うにはAPIキーが必要です")
+    remaining = MAX_GENERATIONS_PER_SESSION - st.session_state.get("generation_count", 0)
+    st.caption(f"残り生成回数: {remaining} / {MAX_GENERATIONS_PER_SESSION}")
 
     st.divider()
     st.header("会社プロフィール")
@@ -894,7 +895,7 @@ with st.sidebar:
 
     if profile_choice != "（新規入力）" and profile_choice in profiles:
         loaded = load_profile(profile_choice)
-        st.success(f"「{profile_choice}」を読み込みました")
+        st.success(f"{profile_choice} を読み込みました")
     else:
         loaded = None
 
@@ -909,26 +910,23 @@ with st.sidebar:
     )
     if st.button("URLから自動取得", use_container_width=True):
         if company_url_input:
-            if not os.environ.get("ANTHROPIC_API_KEY") and not st.session_state.get("api_key"):
-                st.error("先にAPIキーを設定してください")
+            with st.spinner("ウェブサイトを読み取り中..."):
+                scraped = scrape_company_info(company_url_input)
+            if scraped["success"]:
+                with st.spinner("AIで会社情報を抽出中..."):
+                    try:
+                        extracted = extract_company_with_ai(scraped["text"], company_url_input)
+                    except Exception as e:
+                        extracted = None
+                        st.error(f"AI抽出エラー: {e}")
+                if extracted:
+                    st.session_state["extracted_company"] = extracted
+                    st.success("会社情報を取得しました")
+                    st.rerun()
+                elif not extracted:
+                    st.error("会社情報の抽出に失敗しました")
             else:
-                with st.spinner("ウェブサイトを読み取り中..."):
-                    scraped = scrape_company_info(company_url_input)
-                if scraped["success"]:
-                    with st.spinner("AIで会社情報を抽出中..."):
-                        try:
-                            extracted = extract_company_with_ai(scraped["text"], company_url_input)
-                        except Exception as e:
-                            extracted = None
-                            st.error(f"AI抽出エラー: {e}")
-                    if extracted:
-                        st.session_state["extracted_company"] = extracted
-                        st.success("会社情報を取得しました")
-                        st.rerun()
-                    elif not extracted:
-                        st.error("会社情報の抽出に失敗しました")
-                else:
-                    st.error(f"取得エラー: {scraped['error']}")
+                st.error(f"取得エラー: {scraped['error']}")
 
     st.divider()
     st.header("リリース種類")
@@ -1030,110 +1028,71 @@ with tab_company:
 with tab_input:
     st.header(f"{RELEASE_TYPES[release_type]}の情報")
 
-    # -- Notion import section --
-    with st.expander("Notionページから読み込む", expanded=False):
-        st.caption("NotionページのURLを貼り付けると、ページ内容を自動で読み取り・解析してフォームに反映します。")
+    # -- Notion import section (only available if server has Notion API key) --
+    notion_key = os.environ.get("NOTION_API_KEY", "")
+    if notion_key:
+        with st.expander("Notionページから読み込む", expanded=False):
+            st.caption("NotionページのURLを貼り付けると、ページ内容を自動で読み取り・解析してフォームに反映します。")
 
-        notion_key = os.environ.get("NOTION_API_KEY", "")
-        NOTION_CONTENT_FILE = Path(__file__).parent / "notion_content.json"
-        FETCH_SCRIPT = Path(__file__).parent / "fetch_notion.sh"
+            notion_url = st.text_input(
+                "NotionページURL",
+                placeholder="https://www.notion.so/Your-Page-abc123...",
+                key="notion_url",
+            )
 
-        # Method selection
-        if notion_key:
-            fetch_method = "api"
-        else:
-            fetch_method = "cli"
+            def _run_notion_analysis(page_data: dict):
+                """Notionデータを解析し、会社情報も自動取得する共通処理。"""
+                title = page_data["title"]
+                content = page_data["content"]
+                st.success(f"{title} を読み取りました（{len(content)}文字）")
 
-        notion_url = st.text_input(
-            "NotionページURL",
-            placeholder="https://www.notion.so/Your-Page-abc123...",
-            key="notion_url",
-        )
+                with st.spinner("AIで内容を解析中..."):
+                    try:
+                        result = analyze_notion_full(title, content, release_type)
+                    except Exception as e:
+                        st.error(f"AI解析エラー: {e}")
+                        return
 
-        def _run_notion_analysis(page_data: dict):
-            """Notionデータを解析し、会社情報も自動取得する共通処理。"""
-            title = page_data["title"]
-            content = page_data["content"]
-            st.success(f"「{title}」を読み取りました（{len(content)}文字）")
-
-            with st.spinner("AIで内容を解析中...（会社特定＋リリース情報抽出）"):
-                try:
-                    result = analyze_notion_full(title, content, release_type)
-                except Exception as e:
-                    st.error(f"AI解析エラー: {e}")
+                if not result:
+                    st.error("解析結果を取得できませんでした")
                     return
 
-            if not result:
-                st.error("解析結果を取得できませんでした")
-                return
+                st.session_state["notion_analyzed"] = {
+                    "analyzed_text": result.get("release_info", ""),
+                    "raw_content": content,
+                    "title": title,
+                }
+                st.session_state["_notion_fresh"] = True
 
-            # Save release info
-            st.session_state["notion_analyzed"] = {
-                "analyzed_text": result.get("release_info", ""),
-                "raw_content": content,
-                "title": title,
-            }
-            # Flag to force-update form fields on next render
-            st.session_state["_notion_fresh"] = True
+                # Auto-detect company and scrape website
+                company_info = result.get("company", {})
+                company_url_detected = company_info.get("company_url", "")
 
-            # Auto-detect company and scrape website
-            company_info = result.get("company", {})
-            company_url_detected = company_info.get("company_url", "")
-
-            if company_url_detected:
-                with st.spinner(f"会社情報を自動取得中... ({company_url_detected})"):
-                    try:
-                        scraped = scrape_company_info(company_url_detected)
-                        if scraped["success"]:
-                            extracted = extract_company_with_ai(scraped["text"], company_url_detected)
-                            if extracted:
-                                st.session_state["extracted_company"] = extracted
-                        else:
-                            # Scraping failed, use AI-detected info as fallback
+                if company_url_detected:
+                    with st.spinner(f"会社情報を自動取得中..."):
+                        try:
+                            scraped = scrape_company_info(company_url_detected)
+                            if scraped["success"]:
+                                extracted = extract_company_with_ai(scraped["text"], company_url_detected)
+                                if extracted:
+                                    st.session_state["extracted_company"] = extracted
+                            else:
+                                st.session_state["extracted_company"] = {
+                                    "company_name": company_info.get("company_name", ""),
+                                    "url": company_url_detected,
+                                }
+                        except Exception:
                             st.session_state["extracted_company"] = {
                                 "company_name": company_info.get("company_name", ""),
                                 "url": company_url_detected,
                             }
-                    except Exception:
-                        st.session_state["extracted_company"] = {
-                            "company_name": company_info.get("company_name", ""),
-                            "url": company_url_detected,
-                        }
-            elif company_info.get("company_name"):
-                # No URL but have company name - try web search
-                search_name = company_info["company_name"]
-                with st.spinner(f"「{search_name}」のウェブサイトを検索中..."):
-                    try:
-                        scraped = scrape_company_info(f"https://www.google.com/search?q={search_name}+会社概要")
-                        if scraped["success"]:
-                            # Extract URL from search results
-                            client = get_anthropic_client()
-                            resp = client.messages.create(
-                                model="claude-sonnet-4-20250514",
-                                max_tokens=200,
-                                messages=[{"role": "user", "content": f"以下の検索結果から「{search_name}」の公式ウェブサイトURLを1つだけ返してください。URLのみ返してください。\n\n{scraped['text'][:3000]}"}],
-                            )
-                            found_url = resp.content[0].text.strip()
-                            if found_url.startswith("http"):
-                                scraped2 = scrape_company_info(found_url)
-                                if scraped2["success"]:
-                                    extracted = extract_company_with_ai(scraped2["text"], found_url)
-                                    if extracted:
-                                        st.session_state["extracted_company"] = extracted
-                    except Exception:
-                        st.session_state["extracted_company"] = {
-                            "company_name": search_name,
-                        }
 
-            # Suggest release type
-            suggested = result.get("release_type_suggestion", "")
-            if suggested and suggested != release_type:
-                st.info(f"AIの提案: このNotionの内容は「{RELEASE_TYPES.get(suggested, suggested)}」に最適です。サイドバーで変更できます。")
+                suggested = result.get("release_type_suggestion", "")
+                if suggested and suggested != release_type:
+                    st.info(f"AIの提案: このNotionの内容は「{RELEASE_TYPES.get(suggested, suggested)}」に最適です。サイドバーで変更できます。")
 
-            st.rerun()
+                st.rerun()
 
-        # -- Fetch buttons --
-        if fetch_method == "api":
             if st.button("Notionから自動読み込み", type="primary", use_container_width=True):
                 if notion_url:
                     with st.spinner("Notionページを読み取り中..."):
@@ -1146,57 +1105,6 @@ with tab_input:
                         _run_notion_analysis(page_data)
                     elif page_data:
                         st.warning("ページの内容が空です。インテグレーションがページに接続されているか確認してください。")
-        else:
-            col_fetch1, col_fetch2 = st.columns([2, 1])
-            with col_fetch1:
-                if st.button("Notionから読み込む（CLI経由）", use_container_width=True):
-                    if notion_url:
-                        with st.spinner("Claude CLI経由でNotionページを読み取り中...（30〜60秒）"):
-                            import subprocess
-                            try:
-                                sub_result = subprocess.run(
-                                    [str(FETCH_SCRIPT), notion_url],
-                                    capture_output=True, text=True, timeout=120,
-                                    cwd=str(Path(__file__).parent),
-                                )
-                                if NOTION_CONTENT_FILE.exists():
-                                    page_data = json.loads(NOTION_CONTENT_FILE.read_text())
-                                    if page_data.get("content"):
-                                        _run_notion_analysis(page_data)
-                                    else:
-                                        st.warning("ページの内容が空です")
-                                else:
-                                    st.error(f"読み取りに失敗しました\n{sub_result.stderr}")
-                            except subprocess.TimeoutExpired:
-                                st.error("タイムアウトしました。もう一度お試しください。")
-                            except Exception as e:
-                                st.error(f"エラー: {e}")
-            with col_fetch2:
-                if NOTION_CONTENT_FILE.exists():
-                    if st.button("前回のデータを使用", use_container_width=True):
-                        page_data = json.loads(NOTION_CONTENT_FILE.read_text())
-                        if page_data.get("content"):
-                            _run_notion_analysis(page_data)
-
-            st.caption("Notion APIキーが未設定のため、Claude CLIのMCP接続を利用します。")
-
-            with st.popover("Notion APIキーを設定（高速化）"):
-                st.caption(
-                    "APIキーを設定すると直接APIアクセスで高速になります。\n\n"
-                    "1. [Notion Integrations](https://www.notion.so/profile/integrations) でインテグレーション作成\n"
-                    "2. 対象ページで「コネクト」から追加\n"
-                    "3. トークンを入力"
-                )
-                notion_key_input = st.text_input("Notion APIキー", type="password", key="notion_key_input")
-                if notion_key_input:
-                    env_content = ENV_FILE.read_text() if ENV_FILE.exists() else ""
-                    if "NOTION_API_KEY" not in env_content:
-                        env_content += f"\nNOTION_API_KEY={notion_key_input}\n"
-                    else:
-                        env_content = re.sub(r'NOTION_API_KEY=.*', f'NOTION_API_KEY={notion_key_input}', env_content)
-                    ENV_FILE.write_text(env_content)
-                    os.environ["NOTION_API_KEY"] = notion_key_input
-                    st.success("保存しました。ページを再読み込みしてください。")
 
     # Show Notion analysis result
     notion_data = st.session_state.get("notion_analyzed")
@@ -1375,7 +1283,7 @@ with tab_input:
 
     missing_company = not all([company_name, representative, location])
     if missing_company:
-        st.warning("サイドバーでプロフィール「esse-sense」を選択するか、会社情報タブで入力してください。")
+        st.warning("会社情報タブで会社名・代表者名・所在地を入力するか、URLから自動取得してください。")
 
     # Load past press release references if available
     REFERENCES_FILE = Path(__file__).parent / "past_releases.json"
@@ -1392,26 +1300,30 @@ with tab_input:
         except Exception:
             pass
 
+    usage_ok = _check_usage_limit()
+    if not usage_ok:
+        st.error(f"セッションあたりの生成回数上限（{MAX_GENERATIONS_PER_SESSION}回）に達しました。ページを再読み込みするとリセットされます。")
+
     col_gen1, col_gen2 = st.columns([1, 1])
     with col_gen1:
         generate_clicked = st.button(
             "プレスリリースを生成",
             type="primary",
             use_container_width=True,
-            disabled=(not can_generate or missing_company),
+            disabled=(not can_generate or missing_company or not usage_ok),
         )
     with col_gen2:
         if "press_release_result" in st.session_state:
             regenerate_clicked = st.button(
                 "再生成",
                 use_container_width=True,
-                disabled=(not can_generate or missing_company),
+                disabled=(not can_generate or missing_company or not usage_ok),
             )
         else:
             regenerate_clicked = False
 
     if generate_clicked or regenerate_clicked:
-        # Append past release references to user input for AI context
+        _increment_usage()
         full_input = user_input
         if past_releases_context:
             full_input += past_releases_context
@@ -1433,7 +1345,7 @@ with tab_input:
         )
 
         if view_mode == "プレビュー":
-            # Styled preview with esse-sense / Miratsuku design tone
+            # Styled preview
             st.markdown("""
             <style>
             .pr-preview {
@@ -1559,7 +1471,7 @@ with tab_input:
             st.code(plain, language=None)
 
         st.divider()
-        col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
         with col_dl1:
             try:
                 pdf_data = generate_pdf(result)
@@ -1591,50 +1503,6 @@ with tab_input:
                 mime="text/plain",
                 use_container_width=True,
             )
-        with col_dl4:
-            if st.button("保存", use_container_width=True, key="save_to_github"):
-                # Save to output/ directory and commit+push to GitHub
-                output_dir = Path(__file__).parent / "output"
-                output_dir.mkdir(exist_ok=True)
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                fname = f"press_release_{release_type}_{ts}"
-
-                # Save markdown
-                md_path = output_dir / f"{fname}.md"
-                md_path.write_text(result, encoding="utf-8")
-
-                # Save PDF
-                try:
-                    pdf_bytes = generate_pdf(result)
-                    pdf_path = output_dir / f"{fname}.pdf"
-                    pdf_path.write_bytes(pdf_bytes)
-                except Exception:
-                    pass
-
-                # Git commit and push
-                import subprocess
-                try:
-                    subprocess.run(
-                        ["git", "add", str(output_dir)],
-                        cwd=str(Path(__file__).parent),
-                        capture_output=True,
-                    )
-                    subprocess.run(
-                        ["git", "commit", "-m", f"docs: save press release {fname}"],
-                        cwd=str(Path(__file__).parent),
-                        capture_output=True,
-                    )
-                    push_result = subprocess.run(
-                        ["git", "push"],
-                        cwd=str(Path(__file__).parent),
-                        capture_output=True, text=True,
-                    )
-                    if push_result.returncode == 0:
-                        st.success("GitHubに保存しました")
-                    else:
-                        st.warning(f"ローカルに保存しました（push失敗: {push_result.stderr[:100]}）")
-                except Exception as e:
-                    st.info(f"ローカルに保存しました: {md_path}")
 
         st.caption("PR Timesへの入稿時: 画像を3〜5枚以上準備してください（トップ画像はSNSサムネイルに使用されます）")
 
@@ -1762,4 +1630,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 st.divider()
-st.caption("PR Times Press Release Generator | esse-sense format | Powered by Claude AI")
+st.markdown("""
+<div style="text-align: center; color: #9C9590; font-size: 0.8rem; padding: 8px 0;">
+    <p>PR Times Press Release Generator | Powered by Claude AI</p>
+    <p style="font-size: 0.7rem; margin-top: 4px;">
+        本ツールはAIによる自動生成です。生成された文章は必ず内容を確認・修正のうえご利用ください。<br>
+        生成された文章の正確性・完全性について、当サービスは責任を負いません。
+    </p>
+</div>
+""", unsafe_allow_html=True)
