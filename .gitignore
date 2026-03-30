@@ -8,6 +8,6 @@ profiles/*.json
 *.md
 !README.md
 !prtimes-best-practices-report.md
-output/
+# output/ is tracked for saved press releases
 notion_content.json
 .streamlit/secrets.toml

@@ -1495,12 +1495,12 @@ with tab_input:
             st.code(plain, language=None)
 
         st.divider()
-        col_dl1, col_dl2, col_dl3 = st.columns(3)
+        col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
         with col_dl1:
             try:
                 pdf_data = generate_pdf(result)
                 st.download_button(
-                    label="PDFでダウンロード",
+                    label="PDF",
                     data=pdf_data,
                     file_name=f"press_release_{release_type}_{datetime.now().strftime('%Y%m%d')}.pdf",
                     mime="application/pdf",
@@ -1508,17 +1508,11 @@ with tab_input:
                     type="primary",
                 )
             except Exception as e:
-                st.download_button(
-                    label="PDF (未対応)",
-                    data="",
-                    file_name="error.txt",
-                    disabled=True,
-                    use_container_width=True,
-                )
-                st.caption(f"PDF生成エラー: {e}")
+                st.button("PDF (エラー)", disabled=True, use_container_width=True)
+                st.caption(f"{e}")
         with col_dl2:
             st.download_button(
-                label="Markdownでダウンロード",
+                label="Markdown",
                 data=result,
                 file_name=f"press_release_{release_type}_{datetime.now().strftime('%Y%m%d')}.md",
                 mime="text/markdown",
@@ -1527,12 +1521,56 @@ with tab_input:
         with col_dl3:
             plain = result.replace("# ", "").replace("## ", "").replace("**", "").replace("---", "").replace("|", " ")
             st.download_button(
-                label="テキストでダウンロード",
+                label="テキスト",
                 data=plain,
                 file_name=f"press_release_{release_type}_{datetime.now().strftime('%Y%m%d')}.txt",
                 mime="text/plain",
                 use_container_width=True,
             )
+        with col_dl4:
+            if st.button("保存", use_container_width=True, key="save_to_github"):
+                # Save to output/ directory and commit+push to GitHub
+                output_dir = Path(__file__).parent / "output"
+                output_dir.mkdir(exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                fname = f"press_release_{release_type}_{ts}"
+
+                # Save markdown
+                md_path = output_dir / f"{fname}.md"
+                md_path.write_text(result, encoding="utf-8")
+
+                # Save PDF
+                try:
+                    pdf_bytes = generate_pdf(result)
+                    pdf_path = output_dir / f"{fname}.pdf"
+                    pdf_path.write_bytes(pdf_bytes)
+                except Exception:
+                    pass
+
+                # Git commit and push
+                import subprocess
+                try:
+                    subprocess.run(
+                        ["git", "add", str(output_dir)],
+                        cwd=str(Path(__file__).parent),
+                        capture_output=True,
+                    )
+                    subprocess.run(
+                        ["git", "commit", "-m", f"docs: save press release {fname}"],
+                        cwd=str(Path(__file__).parent),
+                        capture_output=True,
+                    )
+                    push_result = subprocess.run(
+                        ["git", "push"],
+                        cwd=str(Path(__file__).parent),
+                        capture_output=True, text=True,
+                    )
+                    if push_result.returncode == 0:
+                        st.success("GitHubに保存しました")
+                    else:
+                        st.warning(f"ローカルに保存しました（push失敗: {push_result.stderr[:100]}）")
+                except Exception as e:
+                    st.info(f"ローカルに保存しました: {md_path}")
 
         st.caption("PR Timesへの入稿時: 画像を3〜5枚以上準備してください（トップ画像はSNSサムネイルに使用されます）")
 
