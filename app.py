@@ -432,7 +432,7 @@ def generate_pdf(markdown_text: str) -> bytes:
         elif line.startswith("- ") or line.startswith("* "):
             text = line[2:].replace("**", "")
             pdf.set_font("NotoSansJP", "", 9.5)
-            pdf.set_text_color(51, 51, 51)
+            pdf.set_text_color(0, 0, 0)
             pdf.set_x(pdf.l_margin + 4)
             pdf.cell(4, 5, chr(8226), new_x="END")  # bullet char
             pdf.multi_cell(page_w - 10, 5, f" {text}")
@@ -443,7 +443,7 @@ def generate_pdf(markdown_text: str) -> bytes:
             num = line[0]
             text = line[3:].replace("**", "")
             pdf.set_font("NotoSansJP", "", 9.5)
-            pdf.set_text_color(51, 51, 51)
+            pdf.set_text_color(0, 0, 0)
             pdf.set_x(pdf.l_margin + 4)
             pdf.cell(6, 5, f"{num}.", new_x="END")
             pdf.multi_cell(page_w - 12, 5, f" {text}")
@@ -462,7 +462,7 @@ def generate_pdf(markdown_text: str) -> bytes:
             # Remove inline markdown
             text = line.replace("**", "")
             pdf.set_font("NotoSansJP", "", 9.5)
-            pdf.set_text_color(51, 51, 51)
+            pdf.set_text_color(0, 0, 0)
             pdf.multi_cell(page_w, 5.5, text)
             pdf.ln(2)
 
