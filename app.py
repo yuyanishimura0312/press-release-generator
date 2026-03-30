@@ -995,14 +995,14 @@ with tab_input:
                     os.environ["NOTION_API_KEY"] = notion_key_input
                     st.success("保存しました。ページを再読み込みしてください。")
 
-    # Show Notion analysis result and pre-fill the main text area
+    # Show Notion analysis result
     notion_data = st.session_state.get("notion_analyzed")
     notion_prefill = ""
     if notion_data:
         st.success(f"Notionページ「{notion_data.get('title', '')}」の内容を解析済み。会社情報も自動取得しました。")
-        with st.expander("解析結果を確認", expanded=False):
-            st.text(notion_data.get("analyzed_text", ""))
         notion_prefill = notion_data.get("analyzed_text", "")
+        with st.expander("元データを確認（AI解析結果）", expanded=False):
+            st.text(notion_prefill)
         if st.button("Notion解析データをクリア", key="clear_notion"):
             del st.session_state["notion_analyzed"]
             if "extracted_company" in st.session_state:
@@ -1011,27 +1011,107 @@ with tab_input:
 
     st.divider()
 
-    # -- Unified input area (auto-filled from Notion or manual) --
-    input_placeholder = {
-        "service": "サービス名: ANSWER法人版\nサービスURL: https://answer.esse-sense.com\nターゲット: 大企業の研究開発部門\nサービス概要: AIを活用した研究者探索システム\n背景: 適切な研究者を見つけるのに数ヶ月かかっていた\n特徴:\n- リスト化機能による一覧性の向上\n- 検索ワードの秘匿性\n- AI分析機能との連携\n数値: 23.5万人のデータベース",
-        "partnership": "提携先: 〇〇株式会社\n提携の種類: 業務提携\n目的: 研究者ネットワークを活用した新規事業開発\n内容: 共同でサービスを開発・提供",
-        "funding": "ラウンド: シリーズA\n調達金額: 〇億円\n投資家:\n- 〇〇キャピタル\n- 〇〇ファンド\n資金使途: プロダクト開発、採用強化",
-        "event": "イベント名: esse-sense Future Forum 2026\n日時: 2026年7月\n会場: 東京\n概要: 研究者とビジネスをつなぐ招待制カンファレンス",
-        "update": "サービス名: ANSWER\nアップデート概要: 法人版の提供開始\n変更点:\n- リスト化機能\n- チーム共有機能\n- ダウンロード機能",
-        "award": "受賞名: 〇〇賞\n授与機関: 〇〇\n受賞日: 2026年〇月\n受賞理由: ...",
+    # -- Parse notion_prefill into field values --
+    def _parse_field(text: str, key: str) -> str:
+        """Extract a field value from 'key: value' formatted text."""
+        for line in text.split("\n"):
+            if line.strip().startswith(key):
+                val = line.split(":", 1)[-1].strip() if ":" in line else ""
+                if val == "（情報なし）":
+                    return ""
+                return val
+        return ""
+
+    def _nv(key: str) -> str:
+        """Get Notion-parsed value for a field."""
+        if not notion_prefill:
+            return ""
+        return _parse_field(notion_prefill, key)
+
+    # -- Structured input fields per release type --
+    FIELD_DEFS = {
+        "service": [
+            ("サービス名", "svc_name", "text", "例: ANSWER法人版"),
+            ("サービスURL", "svc_url", "text", "例: https://answer.esse-sense.com"),
+            ("ターゲット", "svc_target", "text", "例: 大企業の研究開発部門"),
+            ("サービス概要", "svc_summary", "area", "何ができるサービスか、1〜2文で"),
+            ("背景・課題", "svc_bg", "area", "なぜ今これが必要か。箇条書きでもOK"),
+            ("主な特徴", "svc_features", "area", "3つ程度、箇条書きで"),
+            ("差別化ポイント", "svc_diff", "area", "競合との違い、数値があれば"),
+            ("数値データ", "svc_numbers", "text", "例: 23.5万人のデータベース、99.7%のコスト削減"),
+            ("価格", "svc_price", "text", ""),
+            ("代表コメント", "svc_comment", "area", ""),
+            ("今後の展望", "svc_future", "area", ""),
+        ],
+        "partnership": [
+            ("提携先企業名", "ptr_name", "text", ""),
+            ("提携の種類", "ptr_type", "text", "例: 業務提携、共同研究"),
+            ("提携の目的・背景", "ptr_purpose", "area", ""),
+            ("提携内容の詳細", "ptr_detail", "area", ""),
+            ("期待される成果", "ptr_outcome", "area", ""),
+            ("代表コメント", "ptr_comment", "area", ""),
+            ("提携先コメント", "ptr_partner_comment", "area", ""),
+            ("今後の展望", "ptr_future", "area", ""),
+        ],
+        "funding": [
+            ("ラウンド", "fund_round", "text", "例: シード、シリーズA"),
+            ("調達金額", "fund_amount", "text", "例: 1億円"),
+            ("投資家", "fund_investors", "area", "1行1社で"),
+            ("リードインベスター", "fund_lead", "text", ""),
+            ("資金使途", "fund_purpose", "area", ""),
+            ("事業概要", "fund_biz", "area", "現在の事業内容・実績"),
+            ("市場背景", "fund_market", "area", ""),
+            ("代表コメント", "fund_comment", "area", ""),
+            ("今後の戦略", "fund_future", "area", ""),
+        ],
+        "event": [
+            ("イベント名", "evt_name", "text", ""),
+            ("開催日時", "evt_date", "text", ""),
+            ("開催場所", "evt_venue", "text", ""),
+            ("対象者", "evt_target", "text", ""),
+            ("イベント概要", "evt_summary", "area", ""),
+            ("プログラム・登壇者", "evt_program", "area", ""),
+            ("定員", "evt_capacity", "text", ""),
+            ("参加費", "evt_price", "text", ""),
+            ("申込URL", "evt_url", "text", ""),
+        ],
+        "update": [
+            ("サービス名", "upd_name", "text", ""),
+            ("サービスURL", "upd_url", "text", ""),
+            ("アップデート概要", "upd_summary", "text", ""),
+            ("主な変更点", "upd_details", "area", "箇条書きで"),
+            ("背景", "upd_bg", "area", ""),
+            ("ユーザーへのメリット", "upd_impact", "area", ""),
+            ("代表コメント", "upd_comment", "area", ""),
+            ("今後の展望", "upd_future", "area", ""),
+        ],
+        "award": [
+            ("受賞名", "awd_name", "text", ""),
+            ("授与機関", "awd_body", "text", ""),
+            ("受賞日", "awd_date", "text", ""),
+            ("受賞理由", "awd_reason", "area", ""),
+            ("対象サービス概要", "awd_service", "area", ""),
+            ("受賞の意義", "awd_significance", "area", ""),
+            ("代表コメント", "awd_comment", "area", ""),
+        ],
     }
 
-    # If Notion data exists, use it as default value
-    default_input = notion_prefill if notion_prefill else ""
+    fields = FIELD_DEFS.get(release_type, [])
+    field_values = {}
 
-    user_input = st.text_area(
-        "リリース情報（Notionから自動入力、または手動で記入）",
-        value=default_input,
-        height=300,
-        placeholder=input_placeholder.get(release_type, "リリースに関する情報を自由に記入してください"),
-        help="箇条書き・メモ書きでOK。AIがプレスリリースの文体に仕上げます。",
-        key="user_input_area",
-    )
+    for label, key, field_type, placeholder in fields:
+        default = _nv(label)
+        if field_type == "text":
+            field_values[label] = st.text_input(label, value=default, key=key, placeholder=placeholder)
+        else:
+            field_values[label] = st.text_area(label, value=default, key=key, height=80, placeholder=placeholder)
+
+    # Build user_input from field values
+    user_input_parts = []
+    for label, val in field_values.items():
+        if val.strip():
+            user_input_parts.append(f"{label}: {val}")
+    user_input = "\n".join(user_input_parts)
 
     can_generate = bool(user_input.strip())
 
