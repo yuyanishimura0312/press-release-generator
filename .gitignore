@@ -5,6 +5,7 @@ __pycache__/
 .DS_Store
 profiles/*.json
 output/
+history/
 notion_content.json
 .streamlit/secrets.toml
 fonts/

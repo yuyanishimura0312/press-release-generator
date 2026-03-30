@@ -598,7 +598,7 @@ def generate_press_release_ai(
     """Use Claude to generate a full press release from minimal input."""
     client = get_anthropic_client()
 
-    # Build the esse-sense format reference
+    # Build the format reference based on PR Times best practices
     format_guide = _get_format_guide(release_type, common)
 
     prompt = f"""{format_guide}
@@ -865,21 +865,22 @@ PR TIMESの公式ガイドラインと実際の高反響プレスリリース事
 # Save/Load history helpers
 # ============================
 
-HISTORY_DIR = Path(__file__).parent / "history"
-HISTORY_DIR.mkdir(exist_ok=True)
+def _init_session_history():
+    """Initialize session-based history storage."""
+    if "user_history" not in st.session_state:
+        st.session_state["user_history"] = []
 
 
 def save_to_history(release_type: str, result: str, common: dict) -> str:
-    """Save generated press release to local history. Returns filename."""
+    """Save generated press release to session history. Returns filename."""
+    _init_session_history()
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Extract title from markdown
     title_line = ""
     for line in result.split("\n"):
         if line.strip().startswith("# "):
             title_line = line.strip()[2:][:40]
             break
-    safe_title = re.sub(r'[^\w\s]', '', title_line).strip().replace(" ", "_")[:20]
-    fname = f"{ts}_{release_type}_{safe_title}"
+    fname = f"{ts}_{release_type}"
 
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -887,37 +888,23 @@ def save_to_history(release_type: str, result: str, common: dict) -> str:
         "title": title_line,
         "company": common.get("company_name", ""),
         "markdown": result,
+        "_filename": fname,
     }
-    (HISTORY_DIR / f"{fname}.json").write_text(
-        json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    st.session_state["user_history"].insert(0, entry)
     return fname
 
 
 def list_history() -> list[dict]:
-    """List saved press releases, newest first."""
-    items = []
-    for f in sorted(HISTORY_DIR.glob("*.json"), reverse=True):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            data["_filename"] = f.stem
-            items.append(data)
-        except Exception:
-            pass
-    return items
-
-
-def load_history(filename: str) -> dict | None:
-    path = HISTORY_DIR / f"{filename}.json"
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return None
+    """List saved press releases from session, newest first."""
+    _init_session_history()
+    return st.session_state["user_history"]
 
 
 def delete_history(filename: str):
-    path = HISTORY_DIR / f"{filename}.json"
-    if path.exists():
-        path.unlink()
+    _init_session_history()
+    st.session_state["user_history"] = [
+        h for h in st.session_state["user_history"] if h.get("_filename") != filename
+    ]
 
 
 # ============================
@@ -1114,7 +1101,7 @@ with st.sidebar:
         <span style="font-size: 1rem; font-weight: 700; color: #1A1A1A; letter-spacing: -0.02em;">
             PR Generator
         </span>
-        <span style="font-size: 0.7rem; color: #A3A3A3; margin-left: 6px;">by esse-sense</span>
+        <span style="font-size: 0.7rem; color: #A3A3A3; margin-left: 6px;">PR Times最適化</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1480,8 +1467,8 @@ with tab_input:
     # -- Structured input fields per release type --
     FIELD_DEFS = {
         "service": [
-            ("サービス名", "svc_name", "text", "例: ANSWER法人版"),
-            ("サービスURL", "svc_url", "text", "例: https://answer.esse-sense.com"),
+            ("サービス名", "svc_name", "text", "例: SaaSプロダクト名"),
+            ("サービスURL", "svc_url", "text", "例: https://example.com/service"),
             ("ターゲット", "svc_target", "text", "例: 大企業の研究開発部門"),
             ("サービス概要", "svc_summary", "area", "何ができるサービスか、1〜2文で"),
             ("背景・課題", "svc_bg", "area", "なぜ今これが必要か。箇条書きでもOK"),
@@ -1766,7 +1753,10 @@ with tab_history:
 st.markdown("""
 <div style="text-align: center; padding: 32px 0 16px 0; border-top: 1px solid #E5E5E5; margin-top: 40px;">
     <p style="color: #A3A3A3; font-size: 0.75rem; margin: 0;">
-        PR Times Press Release Generator  |  Powered by Claude AI  |  esse-sense
+        PR Times Press Release Generator  |  Powered by Claude AI
+    </p>
+    <p style="color: #C4C4C4; font-size: 0.65rem; margin: 6px 0 0 0;">
+        AIによる自動生成です。内容は必ず確認・修正のうえご利用ください。
     </p>
 </div>
 """, unsafe_allow_html=True)
