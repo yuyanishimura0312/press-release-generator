@@ -1285,72 +1285,76 @@ with tab_company:
 with tab_input:
     st.header(f"{RELEASE_TYPES[release_type]}の情報")
 
-    # -- Notion import section (only available if server has Notion API key) --
+    # -- Notion import section --
     notion_key = os.environ.get("NOTION_API_KEY", "")
-    if notion_key:
-        with st.expander("Notionページから読み込む", expanded=False):
-            st.caption("NotionページのURLを貼り付けると、ページ内容を自動で読み取り・解析してフォームに反映します。")
+    NOTION_CONTENT_FILE = Path(__file__).parent / "notion_content.json"
+    FETCH_SCRIPT = Path(__file__).parent / "fetch_notion.sh"
 
-            notion_url = st.text_input(
-                "NotionページURL",
-                placeholder="https://www.notion.so/Your-Page-abc123...",
-                key="notion_url",
-            )
+    with st.expander("Notionページから読み込む", expanded=False):
+        st.caption("NotionページのURLを貼り付けると、ページ内容を自動で読み取り・解析してフォームに反映します。")
 
-            def _run_notion_analysis(page_data: dict):
-                """Notionデータを解析し、会社情報も自動取得する共通処理。"""
-                title = page_data["title"]
-                content = page_data["content"]
-                st.success(f"{title} を読み取りました（{len(content)}文字）")
+        notion_url = st.text_input(
+            "NotionページURL",
+            placeholder="https://www.notion.so/Your-Page-abc123...",
+            key="notion_url",
+        )
 
-                with st.spinner("AIで内容を解析中..."):
-                    try:
-                        result = analyze_notion_full(title, content, release_type)
-                    except Exception as e:
-                        st.error(f"AI解析エラー: {e}")
-                        return
+        def _run_notion_analysis(page_data: dict):
+            """Notionデータを解析し、会社情報も自動取得する共通処理。"""
+            title = page_data["title"]
+            content = page_data["content"]
+            st.success(f"{title} を読み取りました（{len(content)}文字）")
 
-                if not result:
-                    st.error("解析結果を取得できませんでした")
+            with st.spinner("AIで内容を解析中...（会社特定＋リリース情報抽出）"):
+                try:
+                    result = analyze_notion_full(title, content, release_type)
+                except Exception as e:
+                    st.error(f"AI解析エラー: {e}")
                     return
 
-                st.session_state["notion_analyzed"] = {
-                    "analyzed_text": result.get("release_info", ""),
-                    "raw_content": content,
-                    "title": title,
-                }
-                st.session_state["_notion_fresh"] = True
+            if not result:
+                st.error("解析結果を取得できませんでした")
+                return
 
-                # Auto-detect company and scrape website
-                company_info = result.get("company", {})
-                company_url_detected = company_info.get("company_url", "")
+            st.session_state["notion_analyzed"] = {
+                "analyzed_text": result.get("release_info", ""),
+                "raw_content": content,
+                "title": title,
+            }
+            st.session_state["_notion_fresh"] = True
 
-                if company_url_detected:
-                    with st.spinner(f"会社情報を自動取得中..."):
-                        try:
-                            scraped = scrape_company_info(company_url_detected)
-                            if scraped["success"]:
-                                extracted = extract_company_with_ai(scraped["text"], company_url_detected)
-                                if extracted:
-                                    st.session_state["extracted_company"] = extracted
-                            else:
-                                st.session_state["extracted_company"] = {
-                                    "company_name": company_info.get("company_name", ""),
-                                    "url": company_url_detected,
-                                }
-                        except Exception:
+            # Auto-detect company and scrape website
+            company_info = result.get("company", {})
+            company_url_detected = company_info.get("company_url", "")
+
+            if company_url_detected:
+                with st.spinner(f"会社情報を自動取得中..."):
+                    try:
+                        scraped = scrape_company_info(company_url_detected)
+                        if scraped["success"]:
+                            extracted = extract_company_with_ai(scraped["text"], company_url_detected)
+                            if extracted:
+                                st.session_state["extracted_company"] = extracted
+                        else:
                             st.session_state["extracted_company"] = {
                                 "company_name": company_info.get("company_name", ""),
                                 "url": company_url_detected,
                             }
+                    except Exception:
+                        st.session_state["extracted_company"] = {
+                            "company_name": company_info.get("company_name", ""),
+                            "url": company_url_detected,
+                        }
 
-                suggested = result.get("release_type_suggestion", "")
-                if suggested and suggested != release_type:
-                    st.info(f"AIの提案: このNotionの内容は「{RELEASE_TYPES.get(suggested, suggested)}」に最適です。サイドバーで変更できます。")
+            suggested = result.get("release_type_suggestion", "")
+            if suggested and suggested != release_type:
+                st.info(f"AIの提案: このNotionの内容は「{RELEASE_TYPES.get(suggested, suggested)}」に最適です。サイドバーで変更できます。")
 
-                st.rerun()
+            st.rerun()
 
-            if st.button("Notionから自動読み込み", type="primary", use_container_width=True):
+        if notion_key:
+            # Direct API access
+            if st.button("Notionから読み込む", type="primary", use_container_width=True):
                 if notion_url:
                     with st.spinner("Notionページを読み取り中..."):
                         try:
@@ -1362,6 +1366,53 @@ with tab_input:
                         _run_notion_analysis(page_data)
                     elif page_data:
                         st.warning("ページの内容が空です。インテグレーションがページに接続されているか確認してください。")
+        else:
+            # CLI bridge or cached file
+            col_n1, col_n2 = st.columns([2, 1])
+            with col_n1:
+                if st.button("Notionから読み込む（CLI経由）", use_container_width=True):
+                    if notion_url:
+                        with st.spinner("Claude CLI経由で読み取り中...（30〜60秒）"):
+                            import subprocess
+                            try:
+                                sub_result = subprocess.run(
+                                    [str(FETCH_SCRIPT), notion_url],
+                                    capture_output=True, text=True, timeout=120,
+                                    cwd=str(Path(__file__).parent),
+                                )
+                                if NOTION_CONTENT_FILE.exists():
+                                    page_data = json.loads(NOTION_CONTENT_FILE.read_text())
+                                    if page_data.get("content"):
+                                        _run_notion_analysis(page_data)
+                                    else:
+                                        st.warning("ページの内容が空です")
+                                else:
+                                    st.error("読み取りに失敗しました")
+                            except subprocess.TimeoutExpired:
+                                st.error("タイムアウト")
+                            except Exception as e:
+                                st.error(f"エラー: {e}")
+            with col_n2:
+                if NOTION_CONTENT_FILE.exists():
+                    if st.button("前回のデータを使用", use_container_width=True):
+                        page_data = json.loads(NOTION_CONTENT_FILE.read_text())
+                        if page_data.get("content"):
+                            _run_notion_analysis(page_data)
+
+            # API key setup option
+            with st.popover("Notion APIキーを設定"):
+                st.caption("APIキーを設定すると直接読み込めます。")
+                notion_key_input = st.text_input("Notion APIキー", type="password", key="notion_key_input")
+                if notion_key_input:
+                    env_content = ENV_FILE.read_text() if ENV_FILE.exists() else ""
+                    if "NOTION_API_KEY" not in env_content:
+                        env_content += f"\nNOTION_API_KEY={notion_key_input}\n"
+                    else:
+                        env_content = re.sub(r'NOTION_API_KEY=.*', f'NOTION_API_KEY={notion_key_input}', env_content)
+                    ENV_FILE.write_text(env_content)
+                    os.environ["NOTION_API_KEY"] = notion_key_input
+                    st.success("保存しました")
+                    st.rerun()
 
     # Show Notion analysis result
     notion_data = st.session_state.get("notion_analyzed")
