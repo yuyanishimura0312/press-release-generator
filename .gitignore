@@ -3,7 +3,8 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
-profiles/
+profiles/*.json
+!profiles/esse-sense.json
 *.md
 !README.md
 !prtimes-best-practices-report.md
