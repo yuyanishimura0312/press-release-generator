@@ -404,7 +404,7 @@ def generate_pdf(markdown_text: str) -> bytes:
             pdf.multi_cell(0, 6, clean)
             pdf.ln(1)
 
-    return pdf.output()
+    return bytes(pdf.output())
 
 
 # -- Web scraping for company info --
