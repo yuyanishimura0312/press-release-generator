@@ -10,4 +10,4 @@ profiles/*.json
 !prtimes-best-practices-report.md
 output/
 notion_content.json
-.streamlit/
+.streamlit/secrets.toml

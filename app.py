@@ -22,7 +22,14 @@ PROFILE_DIR = Path(__file__).parent / "profiles"
 PROFILE_DIR.mkdir(exist_ok=True)
 ENV_FILE = Path(__file__).parent / ".env"
 
-# Load .env file if exists
+# Load secrets: Streamlit Cloud secrets > .env file > environment
+try:
+    for key in ["ANTHROPIC_API_KEY", "NOTION_API_KEY"]:
+        if hasattr(st, "secrets") and key in st.secrets:
+            os.environ.setdefault(key, st.secrets[key])
+except Exception:
+    pass
+
 if ENV_FILE.exists():
     for line in ENV_FILE.read_text().splitlines():
         line = line.strip()
