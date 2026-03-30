@@ -281,111 +281,130 @@ JSONのみを返してください。"""
 # -- PDF generation --
 
 def generate_pdf(markdown_text: str) -> bytes:
-    """Convert markdown press release to styled PDF."""
-    from weasyprint import HTML
+    """Convert markdown press release to styled PDF using fpdf2."""
+    from fpdf import FPDF
+    import tempfile, urllib.request
 
-    html_body = md_lib.markdown(markdown_text, extensions=["tables", "fenced_code"])
+    # Download Noto Sans JP font for Japanese support
+    font_dir = Path(__file__).parent / "fonts"
+    font_dir.mkdir(exist_ok=True)
+    font_path = font_dir / "NotoSansJP-Regular.ttf"
+    font_bold_path = font_dir / "NotoSansJP-Bold.ttf"
 
-    html_full = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
+    if not font_path.exists():
+        urllib.request.urlretrieve(
+            "https://github.com/google/fonts/raw/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
+            str(font_path),
+        )
+    # Use regular font for bold too if bold not available
+    if not font_bold_path.exists():
+        font_bold_path = font_path
 
-@page {{
-    size: A4;
-    margin: 28mm 24mm 24mm 24mm;
-}}
-body {{
-    font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
-    font-size: 10.5pt;
-    line-height: 1.85;
-    color: #1A1A1A;
-}}
-h1 {{
-    font-size: 16pt;
-    font-weight: 700;
-    color: #783C28;
-    border-bottom: 2px solid #783C28;
-    padding-bottom: 10px;
-    margin-bottom: 6px;
-    line-height: 1.5;
-}}
-h2 {{
-    font-size: 12pt;
-    font-weight: 600;
-    color: #783C28;
-    margin-top: 24px;
-    margin-bottom: 8px;
-    padding-left: 10px;
-    border-left: 3px solid #D3836F;
-}}
-p {{
-    margin-bottom: 12px;
-    text-align: justify;
-}}
-strong {{
-    color: #1A1A1A;
-    font-weight: 600;
-}}
-hr {{
-    border: none;
-    border-top: 1px solid #E8E2DC;
-    margin: 24px 0;
-}}
-table {{
-    width: 100%;
-    border-collapse: collapse;
-    margin: 12px 0;
-    font-size: 9.5pt;
-}}
-th, td {{
-    border: 1px solid #E8E2DC;
-    padding: 8px 12px;
-    text-align: left;
-}}
-th {{
-    background: #F7F2ED;
-    font-weight: 600;
-    color: #783C28;
-    width: 100px;
-}}
-ul, ol {{
-    padding-left: 20px;
-    margin-bottom: 12px;
-}}
-li {{
-    margin-bottom: 4px;
-}}
-blockquote {{
-    border-left: 3px solid #D3836F;
-    padding: 10px 18px;
-    margin: 14px 0;
-    background: #FDFAF7;
-    color: #4a4a4a;
-}}
-.pr-label {{
-    display: inline-block;
-    background: #783C28;
-    color: #FDFAF7;
-    font-size: 7pt;
-    padding: 2px 12px;
-    border-radius: 2px;
-    margin-bottom: 16px;
-    letter-spacing: 0.18em;
-    font-weight: 600;
-    text-transform: uppercase;
-}}
-</style>
-</head>
-<body>
-<span class="pr-label">PRESS RELEASE</span>
-{html_body}
-</body>
-</html>"""
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+    pdf.add_font("NotoSansJP", "", str(font_path), uni=True)
+    pdf.add_font("NotoSansJP", "B", str(font_bold_path), uni=True)
 
-    return HTML(string=html_full).write_pdf()
+    # PRESS RELEASE label
+    pdf.set_fill_color(120, 60, 40)
+    pdf.set_text_color(253, 250, 247)
+    pdf.set_font("NotoSansJP", "B", 7)
+    pdf.cell(40, 6, "  PRESS RELEASE  ", fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(8)
+
+    # Parse markdown lines
+    pdf.set_text_color(26, 26, 26)
+    lines = markdown_text.split("\n")
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            pdf.ln(3)
+            continue
+
+        if stripped.startswith("# "):
+            # H1 - Title
+            pdf.set_font("NotoSansJP", "B", 14)
+            pdf.set_text_color(120, 60, 40)
+            pdf.multi_cell(0, 8, stripped[2:])
+            # Underline
+            pdf.set_draw_color(120, 60, 40)
+            pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+            pdf.ln(6)
+            pdf.set_text_color(26, 26, 26)
+
+        elif stripped.startswith("## "):
+            # H2 - Section header
+            pdf.ln(4)
+            pdf.set_font("NotoSansJP", "B", 11)
+            pdf.set_text_color(120, 60, 40)
+            y = pdf.get_y()
+            pdf.set_draw_color(211, 131, 111)
+            pdf.line(pdf.l_margin, y, pdf.l_margin, y + 6)
+            pdf.set_x(pdf.l_margin + 4)
+            pdf.multi_cell(0, 6, stripped[3:])
+            pdf.ln(2)
+            pdf.set_text_color(26, 26, 26)
+
+        elif stripped.startswith("**") and stripped.endswith("**"):
+            # Bold text
+            pdf.set_font("NotoSansJP", "B", 10)
+            pdf.multi_cell(0, 6, stripped.strip("*"))
+            pdf.ln(1)
+
+        elif stripped.startswith("- ") or stripped.startswith("* "):
+            # Bullet
+            pdf.set_font("NotoSansJP", "", 10)
+            bullet_text = stripped[2:]
+            pdf.set_x(pdf.l_margin + 4)
+            pdf.multi_cell(0, 6, f"  {bullet_text}")
+            pdf.ln(1)
+
+        elif stripped.startswith("|") and "|" in stripped[1:]:
+            # Table row
+            cells = [c.strip() for c in stripped.split("|")[1:-1]]
+            if all(c.replace("-", "").strip() == "" for c in cells):
+                continue  # Skip separator row
+            is_header = False
+            # Check if next line is separator
+            idx = lines.index(line)
+            if idx + 1 < len(lines) and "---" in lines[idx + 1]:
+                is_header = True
+
+            pdf.set_font("NotoSansJP", "B" if is_header else "", 9)
+            col_w = (pdf.w - pdf.l_margin - pdf.r_margin) / max(len(cells), 1)
+            if len(cells) == 2:
+                col_w_arr = [45, pdf.w - pdf.l_margin - pdf.r_margin - 45]
+            else:
+                col_w_arr = [col_w] * len(cells)
+
+            for i, cell in enumerate(cells):
+                w = col_w_arr[i] if i < len(col_w_arr) else col_w
+                if is_header:
+                    pdf.set_fill_color(247, 242, 237)
+                    pdf.set_text_color(120, 60, 40)
+                    pdf.cell(w, 7, cell, border=1, fill=True)
+                else:
+                    pdf.set_text_color(26, 26, 26)
+                    pdf.cell(w, 7, cell, border=1)
+            pdf.ln()
+
+        elif stripped == "---":
+            pdf.ln(4)
+            pdf.set_draw_color(232, 226, 220)
+            pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+            pdf.ln(4)
+
+        else:
+            # Regular paragraph
+            pdf.set_font("NotoSansJP", "", 10)
+            # Handle inline bold
+            clean = stripped.replace("**", "")
+            pdf.multi_cell(0, 6, clean)
+            pdf.ln(1)
+
+    return pdf.output()
 
 
 # -- Web scraping for company info --
