@@ -862,81 +862,329 @@ PR TIMESの公式ガイドラインと実際の高反響プレスリリース事
 
 
 # ============================
+# Save/Load history helpers
+# ============================
+
+HISTORY_DIR = Path(__file__).parent / "history"
+HISTORY_DIR.mkdir(exist_ok=True)
+
+
+def save_to_history(release_type: str, result: str, common: dict) -> str:
+    """Save generated press release to local history. Returns filename."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Extract title from markdown
+    title_line = ""
+    for line in result.split("\n"):
+        if line.strip().startswith("# "):
+            title_line = line.strip()[2:][:40]
+            break
+    safe_title = re.sub(r'[^\w\s]', '', title_line).strip().replace(" ", "_")[:20]
+    fname = f"{ts}_{release_type}_{safe_title}"
+
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "release_type": release_type,
+        "title": title_line,
+        "company": common.get("company_name", ""),
+        "markdown": result,
+    }
+    (HISTORY_DIR / f"{fname}.json").write_text(
+        json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return fname
+
+
+def list_history() -> list[dict]:
+    """List saved press releases, newest first."""
+    items = []
+    for f in sorted(HISTORY_DIR.glob("*.json"), reverse=True):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            data["_filename"] = f.stem
+            items.append(data)
+        except Exception:
+            pass
+    return items
+
+
+def load_history(filename: str) -> dict | None:
+    path = HISTORY_DIR / f"{filename}.json"
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return None
+
+
+def delete_history(filename: str):
+    path = HISTORY_DIR / f"{filename}.json"
+    if path.exists():
+        path.unlink()
+
+
+# ============================
 # Streamlit UI
 # ============================
 
 st.set_page_config(
-    page_title="プレスリリース自動生成 | PR Times最適化",
+    page_title="プレスリリース自動生成",
     page_icon="PR",
     layout="wide",
 )
 
-st.title("プレスリリース自動生成")
-st.caption("AI搭載 / PR Times最適化 / 最小入力で完成度の高いプレスリリースを作成")
+# -- Inject global CSS at top (renders before content) --
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
 
-# -- Usage counter display --
+    :root {
+        --primary: #783C28;
+        --primary-hover: #8B4A34;
+        --bg: #FAFAFA;
+        --bg-card: #FFFFFF;
+        --bg-sidebar: #F5F5F5;
+        --border: #E5E5E5;
+        --border-focus: #783C28;
+        --text-primary: #1A1A1A;
+        --text-secondary: #737373;
+        --text-muted: #A3A3A3;
+        --accent-green: #16A34A;
+        --accent-red: #DC2626;
+        --radius-sm: 6px;
+        --radius-md: 8px;
+        --radius-lg: 12px;
+    }
+
+    .stApp {
+        background-color: var(--bg) !important;
+        font-family: 'Inter', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    }
+
+    #MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
+
+    /* -- Sidebar -- */
+    section[data-testid="stSidebar"] {
+        background-color: var(--bg-sidebar) !important;
+        border-right: 1px solid var(--border);
+    }
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        font-size: 0.8125rem !important;
+        font-weight: 600 !important;
+        color: var(--text-secondary) !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+    }
+
+    /* -- Typography -- */
+    h1 {
+        color: var(--text-primary) !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.03em !important;
+        font-size: 1.75rem !important;
+    }
+    h2 {
+        color: var(--text-primary) !important;
+        font-weight: 600 !important;
+        font-size: 1.1rem !important;
+        letter-spacing: -0.01em !important;
+    }
+    h3 {
+        color: var(--text-secondary) !important;
+        font-weight: 600 !important;
+        font-size: 0.95rem !important;
+    }
+
+    /* -- Form Inputs (Linear-style) -- */
+    .stTextInput > div > div > input,
+    .stTextArea > div > div > textarea {
+        border: 1px solid var(--border) !important;
+        border-radius: var(--radius-md) !important;
+        padding: 10px 14px !important;
+        font-size: 0.875rem !important;
+        font-family: 'Inter', 'Noto Sans JP', sans-serif !important;
+        color: var(--text-primary) !important;
+        background: var(--bg-card) !important;
+        transition: all 0.15s ease !important;
+    }
+    .stTextInput > div > div > input:focus,
+    .stTextArea > div > div > textarea:focus {
+        border-color: var(--border-focus) !important;
+        box-shadow: 0 0 0 3px rgba(120, 60, 40, 0.06) !important;
+    }
+    .stTextInput label, .stTextArea label, .stSelectbox label {
+        font-size: 0.8125rem !important;
+        font-weight: 500 !important;
+        color: var(--text-secondary) !important;
+    }
+
+    /* -- Select boxes -- */
+    .stSelectbox > div > div {
+        border: 1px solid var(--border) !important;
+        border-radius: var(--radius-md) !important;
+        background: var(--bg-card) !important;
+    }
+
+    /* -- Buttons (Vercel-style) -- */
+    div[data-testid="stButton"] button[kind="primary"] {
+        background-color: var(--text-primary) !important;
+        border: 1px solid var(--text-primary) !important;
+        border-radius: var(--radius-md) !important;
+        color: white !important;
+        font-weight: 500 !important;
+        font-size: 0.875rem !important;
+        font-family: 'Inter', 'Noto Sans JP', sans-serif !important;
+        transition: all 0.15s ease !important;
+        padding: 8px 20px !important;
+    }
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background-color: #333 !important;
+        border-color: #333 !important;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+    }
+    div[data-testid="stButton"] button:not([kind="primary"]) {
+        background-color: var(--bg-card) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: var(--radius-md) !important;
+        color: var(--text-primary) !important;
+        font-weight: 500 !important;
+        font-size: 0.875rem !important;
+        transition: all 0.15s ease !important;
+    }
+    div[data-testid="stButton"] button:not([kind="primary"]):hover {
+        border-color: #CCC !important;
+        background-color: var(--bg) !important;
+    }
+
+    /* -- Tabs (Linear-style minimal) -- */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0;
+        border-bottom: 1px solid var(--border);
+        background: transparent;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding: 10px 20px;
+        font-weight: 500;
+        font-size: 0.875rem;
+        color: var(--text-muted);
+        border-bottom: 2px solid transparent;
+        background: transparent !important;
+    }
+    .stTabs [aria-selected="true"] {
+        border-bottom-color: var(--text-primary) !important;
+        color: var(--text-primary) !important;
+        font-weight: 600;
+    }
+
+    /* -- Expander -- */
+    .streamlit-expanderHeader {
+        font-weight: 500 !important;
+        font-size: 0.875rem !important;
+        color: var(--text-secondary) !important;
+    }
+
+    /* -- Dividers -- */
+    hr { border-color: var(--border) !important; opacity: 0.5; }
+
+    /* -- Download buttons -- */
+    .stDownloadButton button {
+        border-radius: var(--radius-md) !important;
+        border: 1px solid var(--border) !important;
+        font-weight: 500 !important;
+        font-size: 0.8125rem !important;
+    }
+
+    /* -- Radio -- */
+    .stRadio > div { gap: 2px; }
+    .stRadio label { font-size: 0.8125rem !important; }
+
+    /* -- Alerts -- */
+    .stAlert { border-radius: var(--radius-md) !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# -- Usage counter --
 if "generation_count" not in st.session_state:
     st.session_state["generation_count"] = 0
 
-# -- Sidebar --
+# -- Sidebar (compact, Linear-style) --
 with st.sidebar:
-    remaining = MAX_GENERATIONS_PER_SESSION - st.session_state.get("generation_count", 0)
-    st.caption(f"残り生成回数: {remaining} / {MAX_GENERATIONS_PER_SESSION}")
+    st.markdown("""
+    <div style="padding: 4px 0 12px 0;">
+        <span style="font-size: 1rem; font-weight: 700; color: #1A1A1A; letter-spacing: -0.02em;">
+            PR Generator
+        </span>
+        <span style="font-size: 0.7rem; color: #A3A3A3; margin-left: 6px;">by esse-sense</span>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.divider()
-    st.header("会社プロフィール")
-
+    st.header("PROFILE")
     profiles = list_profiles()
     profile_choice = st.selectbox(
-        "保存済みプロフィール",
+        "会社プロフィール",
         ["（新規入力）"] + profiles,
         key="profile_select",
+        label_visibility="collapsed",
     )
-
     if profile_choice != "（新規入力）" and profile_choice in profiles:
         loaded = load_profile(profile_choice)
-        st.success(f"{profile_choice} を読み込みました")
     else:
         loaded = None
 
-    st.divider()
-
-    # URL-based company info extraction
-    st.header("会社情報をURLから取得")
-    company_url_input = st.text_input(
-        "会社URLを入力",
-        placeholder="https://example.com",
-        key="scrape_url",
-    )
-    if st.button("URLから自動取得", use_container_width=True):
-        if company_url_input:
-            with st.spinner("ウェブサイトを読み取り中..."):
-                scraped = scrape_company_info(company_url_input)
-            if scraped["success"]:
-                with st.spinner("AIで会社情報を抽出中..."):
-                    try:
-                        extracted = extract_company_with_ai(scraped["text"], company_url_input)
-                    except Exception as e:
-                        extracted = None
-                        st.error(f"AI抽出エラー: {e}")
-                if extracted:
-                    st.session_state["extracted_company"] = extracted
-                    st.success("会社情報を取得しました")
-                    st.rerun()
-                elif not extracted:
-                    st.error("会社情報の抽出に失敗しました")
-            else:
-                st.error(f"取得エラー: {scraped['error']}")
-
-    st.divider()
-    st.header("リリース種類")
+    st.header("RELEASE TYPE")
     release_type = st.radio(
-        "種類を選択",
+        "種類",
         list(RELEASE_TYPES.keys()),
         format_func=lambda x: f"{RELEASE_TYPES[x]}",
         key="release_type",
+        label_visibility="collapsed",
     )
-    st.caption(RELEASE_DESCRIPTIONS[release_type])
+
+    st.divider()
+
+    st.header("COMPANY URL")
+    company_url_input = st.text_input(
+        "URL",
+        placeholder="https://example.com",
+        key="scrape_url",
+        label_visibility="collapsed",
+    )
+    if st.button("会社情報を取得", use_container_width=True):
+        if company_url_input:
+            with st.spinner("取得中..."):
+                scraped = scrape_company_info(company_url_input)
+            if scraped["success"]:
+                with st.spinner("AI解析中..."):
+                    try:
+                        extracted_data = extract_company_with_ai(scraped["text"], company_url_input)
+                    except Exception as e:
+                        extracted_data = None
+                        st.error(f"{e}")
+                if extracted_data:
+                    st.session_state["extracted_company"] = extracted_data
+                    st.rerun()
+            else:
+                st.error("取得失敗")
+
+    st.divider()
+
+    # History section
+    st.header("HISTORY")
+    history = list_history()
+    if history:
+        for item in history[:8]:
+            title_short = (item.get("title", "無題"))[:25]
+            date_str = item.get("timestamp", "")[:10]
+            if st.button(f"{date_str}  {title_short}", key=f"hist_{item['_filename']}", use_container_width=True):
+                st.session_state["press_release_result"] = item["markdown"]
+                st.session_state["loaded_from_history"] = True
+                st.rerun()
+    else:
+        st.caption("保存済みのリリースはありません")
+
+    st.divider()
+    remaining = MAX_GENERATIONS_PER_SESSION - st.session_state.get("generation_count", 0)
+    st.caption(f"残り {remaining}/{MAX_GENERATIONS_PER_SESSION} 回")
 
 # -- Determine initial values (priority: extracted > loaded > empty) --
 extracted = st.session_state.get("extracted_company", {})
@@ -952,7 +1200,16 @@ def val(key: str, default: str = "") -> str:
 
 
 # -- Main area --
-tab_input, tab_company = st.tabs(["リリース内容", "会社情報"])
+st.markdown("""
+<div style="margin-bottom: 20px;">
+    <h1 style="margin-bottom: 4px;">プレスリリース自動生成</h1>
+    <p style="color: #737373; font-size: 0.875rem; margin: 0;">
+        Notionから読み込み / AI自動生成 / PR Times最適化 / PDF出力
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+tab_input, tab_company, tab_history = st.tabs(["作成", "会社情報", "保存履歴"])
 
 with tab_company:
     st.header("会社情報")
@@ -1331,11 +1588,36 @@ with tab_input:
             result = generate_press_release_ai(release_type, common, full_input)
             st.session_state["press_release_result"] = result
 
-    # -- Display result with styled preview --
+    # -- Display result --
     if "press_release_result" in st.session_state:
         result = st.session_state["press_release_result"]
 
         st.divider()
+
+        # Action bar
+        col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
+        with col_dl1:
+            try:
+                pdf_data = generate_pdf(result)
+                st.download_button("PDF", data=pdf_data,
+                    file_name=f"press_release_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf", use_container_width=True, type="primary")
+            except Exception:
+                st.button("PDF (error)", disabled=True, use_container_width=True)
+        with col_dl2:
+            st.download_button("Markdown", data=result,
+                file_name=f"press_release_{datetime.now().strftime('%Y%m%d')}.md",
+                mime="text/markdown", use_container_width=True)
+        with col_dl3:
+            plain = result.replace("# ", "").replace("## ", "").replace("**", "").replace("---", "").replace("|", " ")
+            st.download_button("Text", data=plain,
+                file_name=f"press_release_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain", use_container_width=True)
+        with col_dl4:
+            if st.button("Save", use_container_width=True, key="save_btn"):
+                save_to_history(release_type, result, common)
+                st.success("保存しました")
+                st.rerun()
 
         view_mode = st.radio(
             "表示モード",
@@ -1344,122 +1626,57 @@ with tab_input:
             key="view_mode",
         )
 
+
         if view_mode == "プレビュー":
-            # Styled preview
             st.markdown("""
             <style>
             .pr-preview {
                 font-family: 'Noto Sans JP', 'Inter', -apple-system, sans-serif;
-                max-width: 780px;
-                margin: 0 auto;
-                padding: 52px 56px;
+                max-width: 760px;
+                margin: 24px auto;
+                padding: 48px 52px;
                 background: #FFFFFF;
-                border: 1px solid #E8E2DC;
+                border: 1px solid #E5E5E5;
                 border-radius: 12px;
-                line-height: 1.9;
+                line-height: 1.85;
                 color: #1A1A1A;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 6px 24px rgba(120, 60, 40, 0.06);
+                box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04);
             }
             .pr-preview h1 {
-                font-size: 1.45rem;
-                font-weight: 700;
-                color: #1A1A1A;
-                border-bottom: 2px solid #783C28;
-                padding-bottom: 16px;
-                margin-bottom: 8px;
-                line-height: 1.55;
-                letter-spacing: -0.01em;
+                font-size: 1.4rem; font-weight: 700; color: #1A1A1A;
+                border-bottom: 2px solid #1A1A1A;
+                padding-bottom: 14px; margin-bottom: 8px;
+                line-height: 1.5; letter-spacing: -0.02em;
             }
             .pr-preview h2 {
-                font-size: 1.05rem;
-                font-weight: 600;
-                color: #783C28;
-                margin-top: 40px;
-                margin-bottom: 14px;
-                padding-left: 16px;
-                border-left: 3px solid #D3836F;
-                letter-spacing: 0.01em;
+                font-size: 1rem; font-weight: 600; color: #1A1A1A;
+                margin-top: 36px; margin-bottom: 12px;
+                padding-bottom: 6px; border-bottom: 1px solid #E5E5E5;
             }
-            .pr-preview p {
-                margin-bottom: 18px;
-                text-align: justify;
-                color: #333;
-                font-size: 0.95rem;
-            }
-            .pr-preview strong {
-                color: #1A1A1A;
-                font-weight: 600;
-            }
-            .pr-preview hr {
-                border: none;
-                border-top: 1px solid #F0EBE5;
-                margin: 40px 0;
-            }
-            .pr-preview table {
-                width: 100%;
-                border-collapse: collapse;
-                margin: 20px 0;
-                font-size: 0.875rem;
-                border-radius: 8px;
-                overflow: hidden;
-            }
-            .pr-preview th, .pr-preview td {
-                border: 1px solid #E8E2DC;
-                padding: 11px 16px;
-                text-align: left;
-            }
-            .pr-preview th {
-                background: #F7F2ED;
-                font-weight: 600;
-                color: #783C28;
-                width: 110px;
-                font-size: 0.8125rem;
-            }
-            .pr-preview td {
-                background: #FFFFFF;
-            }
-            .pr-preview ul, .pr-preview ol {
-                padding-left: 24px;
-                margin-bottom: 18px;
-            }
-            .pr-preview li {
-                margin-bottom: 6px;
-                font-size: 0.95rem;
-                color: #333;
-            }
+            .pr-preview p { margin-bottom: 16px; font-size: 0.9rem; line-height: 1.85; }
+            .pr-preview strong { font-weight: 600; }
+            .pr-preview hr { border: none; border-top: 1px solid #E5E5E5; margin: 32px 0; }
+            .pr-preview table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.85rem; }
+            .pr-preview th, .pr-preview td { border: 1px solid #E5E5E5; padding: 10px 14px; text-align: left; }
+            .pr-preview th { background: #F5F5F5; font-weight: 600; width: 100px; font-size: 0.8rem; }
+            .pr-preview ul, .pr-preview ol { padding-left: 20px; margin-bottom: 16px; }
+            .pr-preview li { margin-bottom: 4px; font-size: 0.9rem; }
             .pr-preview blockquote {
-                border-left: 3px solid #D3836F;
-                padding: 18px 28px;
-                margin: 24px 0;
-                background: #FDFAF7;
-                color: #4a4a4a;
-                font-style: normal;
-                border-radius: 0 8px 8px 0;
-                font-size: 0.95rem;
+                border-left: 3px solid #E5E5E5; padding: 14px 24px; margin: 20px 0;
+                background: #FAFAFA; color: #404040; border-radius: 0 6px 6px 0; font-size: 0.9rem;
             }
-            .pr-label {
-                display: inline-block;
-                background: #783C28;
-                color: #FDFAF7;
-                font-size: 0.6875rem;
-                padding: 4px 16px;
-                border-radius: 4px;
-                margin-bottom: 24px;
-                letter-spacing: 0.18em;
-                font-weight: 600;
-                text-transform: uppercase;
+            .pr-badge {
+                display: inline-block; background: #1A1A1A; color: #FFF;
+                font-size: 0.625rem; padding: 3px 12px; border-radius: 3px;
+                margin-bottom: 20px; letter-spacing: 0.2em; font-weight: 600; text-transform: uppercase;
             }
             </style>
             """, unsafe_allow_html=True)
 
-            # Convert markdown to styled HTML
-            html_body = md_lib.markdown(
-                result,
-                extensions=["tables", "fenced_code"],
-            )
+            html_body = md_lib.markdown(result, extensions=["tables", "fenced_code"])
             st.markdown(
                 f'<div class="pr-preview">'
-                f'<span class="pr-label">PRESS RELEASE</span>'
+                f'<span class="pr-badge">PRESS RELEASE</span>'
                 f'{html_body}'
                 f'</div>',
                 unsafe_allow_html=True,
@@ -1470,172 +1687,35 @@ with tab_input:
             plain = result.replace("# ", "").replace("## ", "").replace("**", "").replace("---", "").replace("|", " ")
             st.code(plain, language=None)
 
-        st.divider()
-        col_dl1, col_dl2, col_dl3 = st.columns(3)
-        with col_dl1:
-            try:
-                pdf_data = generate_pdf(result)
-                st.download_button(
-                    label="PDF",
-                    data=pdf_data,
-                    file_name=f"press_release_{release_type}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                    type="primary",
-                )
-            except Exception as e:
-                st.button("PDF (エラー)", disabled=True, use_container_width=True)
-                st.caption(f"{e}")
-        with col_dl2:
-            st.download_button(
-                label="Markdown",
-                data=result,
-                file_name=f"press_release_{release_type}_{datetime.now().strftime('%Y%m%d')}.md",
-                mime="text/markdown",
-                use_container_width=True,
-            )
-        with col_dl3:
-            plain = result.replace("# ", "").replace("## ", "").replace("**", "").replace("---", "").replace("|", " ")
-            st.download_button(
-                label="テキスト",
-                data=plain,
-                file_name=f"press_release_{release_type}_{datetime.now().strftime('%Y%m%d')}.txt",
-                mime="text/plain",
-                use_container_width=True,
-            )
+        st.caption("PR Timesへの入稿時: 画像を3〜5枚以上準備してください")
 
-        st.caption("PR Timesへの入稿時: 画像を3〜5枚以上準備してください（トップ画像はSNSサムネイルに使用されます）")
+# -- History tab --
+with tab_history:
+    st.markdown("#### 保存済みプレスリリース")
+    history_items = list_history()
+    if not history_items:
+        st.info("保存済みのプレスリリースはありません。生成後に「Save」ボタンで保存できます。")
+    else:
+        for item in history_items:
+            with st.container(border=True):
+                col_h1, col_h2, col_h3 = st.columns([4, 1, 1])
+                with col_h1:
+                    st.markdown(f"**{item.get('title', '無題')[:50]}**")
+                    st.caption(f"{item.get('timestamp', '')[:16]}  |  {RELEASE_TYPES.get(item.get('release_type', ''), '')}  |  {item.get('company', '')}")
+                with col_h2:
+                    if st.button("開く", key=f"open_{item['_filename']}", use_container_width=True):
+                        st.session_state["press_release_result"] = item["markdown"]
+                        st.rerun()
+                with col_h3:
+                    if st.button("削除", key=f"del_{item['_filename']}", use_container_width=True):
+                        delete_history(item["_filename"])
+                        st.rerun()
 
 # -- Footer --
 st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
-
-    /* -- Global -- */
-    .stApp {
-        background-color: #FDFAF7 !important;
-        font-family: 'Inter', 'Noto Sans JP', -apple-system, sans-serif !important;
-    }
-    #MainMenu { visibility: hidden; }
-    footer { visibility: hidden; }
-
-    /* -- Sidebar -- */
-    section[data-testid="stSidebar"] {
-        background-color: #F7F2ED !important;
-        border-right: 1px solid #E8E2DC;
-    }
-
-    /* -- Typography -- */
-    h1 { color: #1A1A1A !important; font-weight: 700 !important; letter-spacing: -0.02em; }
-    h2, h3 { color: #783C28 !important; font-weight: 600 !important; }
-
-    /* -- Form Inputs -- */
-    .stTextInput > div > div > input,
-    .stTextArea > div > div > textarea {
-        border: 1px solid #E8E2DC !important;
-        border-radius: 8px !important;
-        padding: 10px 14px !important;
-        font-size: 0.9375rem !important;
-        font-family: 'Inter', 'Noto Sans JP', sans-serif !important;
-        color: #1A1A1A !important;
-        background: #FFFFFF !important;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
-    }
-    .stTextInput > div > div > input:focus,
-    .stTextArea > div > div > textarea:focus {
-        border-color: #A0503C !important;
-        box-shadow: 0 0 0 3px rgba(120, 60, 40, 0.08) !important;
-        outline: none !important;
-    }
-    .stTextInput label, .stTextArea label, .stSelectbox label {
-        font-size: 0.875rem !important;
-        font-weight: 500 !important;
-        color: #6B6560 !important;
-    }
-
-    /* -- Select boxes -- */
-    .stSelectbox > div > div {
-        border: 1px solid #E8E2DC !important;
-        border-radius: 8px !important;
-        background: #FFFFFF !important;
-    }
-
-    /* -- Buttons -- */
-    div[data-testid="stButton"] button[kind="primary"] {
-        background-color: #783C28 !important;
-        border: 1px solid #783C28 !important;
-        border-radius: 8px !important;
-        font-weight: 600 !important;
-        font-family: 'Inter', 'Noto Sans JP', sans-serif !important;
-        transition: all 0.15s ease !important;
-        box-shadow: 0 1px 2px rgba(120, 60, 40, 0.08) !important;
-    }
-    div[data-testid="stButton"] button[kind="primary"]:hover {
-        background-color: #8B4A34 !important;
-        border-color: #8B4A34 !important;
-        box-shadow: 0 2px 8px rgba(120, 60, 40, 0.15) !important;
-        transform: translateY(-1px);
-    }
-    div[data-testid="stButton"] button:not([kind="primary"]) {
-        background-color: #FFFFFF !important;
-        border: 1px solid #E8E2DC !important;
-        border-radius: 8px !important;
-        color: #6B6560 !important;
-        font-weight: 500 !important;
-        transition: all 0.15s ease !important;
-    }
-    div[data-testid="stButton"] button:not([kind="primary"]):hover {
-        border-color: #D4CFC8 !important;
-        background-color: #F7F2ED !important;
-    }
-
-    /* -- Tabs -- */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0;
-        border-bottom: 1px solid #E8E2DC;
-    }
-    .stTabs [data-baseweb="tab"] {
-        padding: 10px 24px;
-        font-weight: 500;
-        color: #9C9590;
-        border-bottom: 2px solid transparent;
-    }
-    .stTabs [aria-selected="true"] {
-        border-bottom-color: #783C28 !important;
-        color: #783C28 !important;
-        font-weight: 600;
-    }
-
-    /* -- Expander -- */
-    .streamlit-expanderHeader {
-        font-weight: 500 !important;
-        color: #6B6560 !important;
-    }
-
-    /* -- Dividers -- */
-    hr {
-        border-color: #F0EBE5 !important;
-    }
-
-    /* -- Download buttons -- */
-    .stDownloadButton button {
-        border-radius: 8px !important;
-        border: 1px solid #E8E2DC !important;
-        font-weight: 500 !important;
-    }
-
-    /* -- Radio -- */
-    .stRadio > div { gap: 4px; }
-    .stRadio label { font-size: 0.875rem !important; }
-</style>
-""", unsafe_allow_html=True)
-st.divider()
-st.markdown("""
-<div style="text-align: center; color: #9C9590; font-size: 0.8rem; padding: 8px 0;">
-    <p>PR Times Press Release Generator | Powered by Claude AI</p>
-    <p style="font-size: 0.7rem; margin-top: 4px;">
-        本ツールはAIによる自動生成です。生成された文章は必ず内容を確認・修正のうえご利用ください。<br>
-        生成された文章の正確性・完全性について、当サービスは責任を負いません。
+<div style="text-align: center; padding: 32px 0 16px 0; border-top: 1px solid #E5E5E5; margin-top: 40px;">
+    <p style="color: #A3A3A3; font-size: 0.75rem; margin: 0;">
+        PR Times Press Release Generator  |  Powered by Claude AI  |  esse-sense
     </p>
 </div>
 """, unsafe_allow_html=True)
