@@ -281,128 +281,59 @@ JSONのみを返してください。"""
 # -- PDF generation --
 
 def generate_pdf(markdown_text: str) -> bytes:
-    """Convert markdown press release to styled PDF using fpdf2."""
+    """Convert markdown press release to styled PDF using fpdf2 write_html."""
     from fpdf import FPDF
-    import tempfile, urllib.request
+    import urllib.request
 
     # Download Noto Sans JP font for Japanese support
     font_dir = Path(__file__).parent / "fonts"
     font_dir.mkdir(exist_ok=True)
     font_path = font_dir / "NotoSansJP-Regular.ttf"
-    font_bold_path = font_dir / "NotoSansJP-Bold.ttf"
 
     if not font_path.exists():
         urllib.request.urlretrieve(
             "https://github.com/google/fonts/raw/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
             str(font_path),
         )
-    # Use regular font for bold too if bold not available
-    if not font_bold_path.exists():
-        font_bold_path = font_path
+
+    # Convert markdown to HTML
+    html_body = md_lib.markdown(markdown_text, extensions=["tables", "fenced_code"])
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
     pdf.add_font("NotoSansJP", "", str(font_path), uni=True)
-    pdf.add_font("NotoSansJP", "B", str(font_bold_path), uni=True)
+    pdf.add_font("NotoSansJP", "B", str(font_path), uni=True)
+    pdf.add_font("NotoSansJP", "I", str(font_path), uni=True)
+    pdf.set_font("NotoSansJP", "", 10)
 
     # PRESS RELEASE label
     pdf.set_fill_color(120, 60, 40)
     pdf.set_text_color(253, 250, 247)
     pdf.set_font("NotoSansJP", "B", 7)
     pdf.cell(40, 6, "  PRESS RELEASE  ", fill=True, new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(8)
-
-    # Parse markdown lines
+    pdf.ln(6)
     pdf.set_text_color(26, 26, 26)
-    lines = markdown_text.split("\n")
 
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            pdf.ln(3)
-            continue
+    # Build styled HTML for fpdf2's write_html
+    styled_html = f"""
+<font face="NotoSansJP" size="10">
+{html_body}
+</font>
+"""
+    # Replace HTML tags with fpdf2-compatible styling
+    styled_html = styled_html.replace("<h1>", '<font face="NotoSansJP" size="16" color="#783C28"><b>')
+    styled_html = styled_html.replace("</h1>", "</b></font><br><br>")
+    styled_html = styled_html.replace("<h2>", '<br><font face="NotoSansJP" size="12" color="#783C28"><b>')
+    styled_html = styled_html.replace("</h2>", "</b></font><br>")
+    styled_html = styled_html.replace("<hr>", "<br>")
+    styled_html = styled_html.replace("<hr/>", "<br>")
+    styled_html = styled_html.replace("<hr />", "<br>")
+    # Table styling
+    styled_html = styled_html.replace("<table>", '<table border="1" width="100%">')
+    styled_html = styled_html.replace("<th>", '<th bgcolor="#F7F2ED" width="25%">')
 
-        if stripped.startswith("# "):
-            # H1 - Title
-            pdf.set_font("NotoSansJP", "B", 14)
-            pdf.set_text_color(120, 60, 40)
-            pdf.multi_cell(0, 8, stripped[2:])
-            # Underline
-            pdf.set_draw_color(120, 60, 40)
-            pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-            pdf.ln(6)
-            pdf.set_text_color(26, 26, 26)
-
-        elif stripped.startswith("## "):
-            # H2 - Section header
-            pdf.ln(4)
-            pdf.set_font("NotoSansJP", "B", 11)
-            pdf.set_text_color(120, 60, 40)
-            y = pdf.get_y()
-            pdf.set_draw_color(211, 131, 111)
-            pdf.line(pdf.l_margin, y, pdf.l_margin, y + 6)
-            pdf.set_x(pdf.l_margin + 4)
-            pdf.multi_cell(0, 6, stripped[3:])
-            pdf.ln(2)
-            pdf.set_text_color(26, 26, 26)
-
-        elif stripped.startswith("**") and stripped.endswith("**"):
-            # Bold text
-            pdf.set_font("NotoSansJP", "B", 10)
-            pdf.multi_cell(0, 6, stripped.strip("*"))
-            pdf.ln(1)
-
-        elif stripped.startswith("- ") or stripped.startswith("* "):
-            # Bullet
-            pdf.set_font("NotoSansJP", "", 10)
-            bullet_text = stripped[2:]
-            pdf.set_x(pdf.l_margin + 4)
-            pdf.multi_cell(0, 6, f"  {bullet_text}")
-            pdf.ln(1)
-
-        elif stripped.startswith("|") and "|" in stripped[1:]:
-            # Table row
-            cells = [c.strip() for c in stripped.split("|")[1:-1]]
-            if all(c.replace("-", "").strip() == "" for c in cells):
-                continue  # Skip separator row
-            is_header = False
-            # Check if next line is separator
-            idx = lines.index(line)
-            if idx + 1 < len(lines) and "---" in lines[idx + 1]:
-                is_header = True
-
-            pdf.set_font("NotoSansJP", "B" if is_header else "", 9)
-            col_w = (pdf.w - pdf.l_margin - pdf.r_margin) / max(len(cells), 1)
-            if len(cells) == 2:
-                col_w_arr = [45, pdf.w - pdf.l_margin - pdf.r_margin - 45]
-            else:
-                col_w_arr = [col_w] * len(cells)
-
-            for i, cell in enumerate(cells):
-                w = col_w_arr[i] if i < len(col_w_arr) else col_w
-                if is_header:
-                    pdf.set_fill_color(247, 242, 237)
-                    pdf.set_text_color(120, 60, 40)
-                    pdf.cell(w, 7, cell, border=1, fill=True)
-                else:
-                    pdf.set_text_color(26, 26, 26)
-                    pdf.cell(w, 7, cell, border=1)
-            pdf.ln()
-
-        elif stripped == "---":
-            pdf.ln(4)
-            pdf.set_draw_color(232, 226, 220)
-            pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-            pdf.ln(4)
-
-        else:
-            # Regular paragraph
-            pdf.set_font("NotoSansJP", "", 10)
-            # Handle inline bold
-            clean = stripped.replace("**", "")
-            pdf.multi_cell(0, 6, clean)
-            pdf.ln(1)
+    pdf.write_html(styled_html)
 
     return bytes(pdf.output())
 
