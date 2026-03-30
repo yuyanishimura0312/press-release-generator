@@ -653,34 +653,23 @@ with tab_input:
         st.caption("NotionページのURLを貼り付けると、ページ内容を自動で読み取り・解析してフォームに反映します。")
 
         notion_key = os.environ.get("NOTION_API_KEY", "")
-        if not notion_key:
-            st.info(
-                "Notion APIキーが未設定です。以下の手順で設定してください:\n\n"
-                "1. [Notion Integrations](https://www.notion.so/profile/integrations) にアクセス\n"
-                "2. 「新しいインテグレーション」を作成（名前は自由）\n"
-                "3. 読み取りたいNotionページで「...」→「コネクト」からインテグレーションを追加\n"
-                "4. トークンをここに入力"
-            )
-            notion_key_input = st.text_input("Notion APIキー", type="password", key="notion_key_input")
-            if notion_key_input:
-                # Save to .env
-                env_content = ENV_FILE.read_text() if ENV_FILE.exists() else ""
-                if "NOTION_API_KEY" not in env_content:
-                    env_content += f"\nNOTION_API_KEY={notion_key_input}\n"
-                else:
-                    env_content = re.sub(r'NOTION_API_KEY=.*', f'NOTION_API_KEY={notion_key_input}', env_content)
-                ENV_FILE.write_text(env_content)
-                os.environ["NOTION_API_KEY"] = notion_key_input
-                notion_key = notion_key_input
-                st.success("Notion APIキーを保存しました")
-                st.rerun()
+        NOTION_CONTENT_FILE = Path(__file__).parent / "notion_content.json"
+        FETCH_SCRIPT = Path(__file__).parent / "fetch_notion.sh"
 
+        # Method selection
         if notion_key:
-            notion_url = st.text_input(
-                "NotionページURL",
-                placeholder="https://www.notion.so/Your-Page-abc123...",
-                key="notion_url",
-            )
+            fetch_method = "api"
+        else:
+            fetch_method = "cli"
+
+        notion_url = st.text_input(
+            "NotionページURL",
+            placeholder="https://www.notion.so/Your-Page-abc123...",
+            key="notion_url",
+        )
+
+        if fetch_method == "api":
+            # Direct API method
             if st.button("Notionから読み込む", use_container_width=True):
                 if notion_url:
                     with st.spinner("Notionページを読み取り中..."):
@@ -705,6 +694,75 @@ with tab_input:
                                 st.error(f"AI解析エラー: {e}")
                     elif page_data:
                         st.warning("ページの内容が空です。インテグレーションがページに接続されているか確認してください。")
+        else:
+            # CLI bridge method (uses Claude Code's MCP connection)
+            col_fetch1, col_fetch2 = st.columns([2, 1])
+            with col_fetch1:
+                if st.button("Notionから読み込む（CLI経由）", use_container_width=True):
+                    if notion_url:
+                        with st.spinner("Claude CLI経由でNotionページを読み取り中...（30〜60秒）"):
+                            import subprocess
+                            try:
+                                result = subprocess.run(
+                                    [str(FETCH_SCRIPT), notion_url],
+                                    capture_output=True, text=True, timeout=120,
+                                    cwd=str(Path(__file__).parent),
+                                )
+                                if NOTION_CONTENT_FILE.exists():
+                                    page_data = json.loads(NOTION_CONTENT_FILE.read_text())
+                                    if page_data.get("content"):
+                                        st.success(f"「{page_data['title']}」を読み取りました（{len(page_data['content'])}文字）")
+                                        with st.spinner("AIで内容を解析中..."):
+                                            analyzed = analyze_notion_content_with_ai(
+                                                page_data["title"],
+                                                page_data["content"],
+                                                release_type,
+                                            )
+                                            st.session_state["notion_analyzed"] = analyzed
+                                            st.rerun()
+                                    else:
+                                        st.warning("ページの内容が空です")
+                                else:
+                                    st.error(f"読み取りに失敗しました\n{result.stderr}")
+                            except subprocess.TimeoutExpired:
+                                st.error("タイムアウトしました。もう一度お試しください。")
+                            except Exception as e:
+                                st.error(f"エラー: {e}")
+            with col_fetch2:
+                # Also allow loading from previously fetched file
+                if NOTION_CONTENT_FILE.exists():
+                    if st.button("前回のデータを使用", use_container_width=True):
+                        page_data = json.loads(NOTION_CONTENT_FILE.read_text())
+                        if page_data.get("content"):
+                            with st.spinner("AIで内容を解析中..."):
+                                analyzed = analyze_notion_content_with_ai(
+                                    page_data["title"],
+                                    page_data["content"],
+                                    release_type,
+                                )
+                                st.session_state["notion_analyzed"] = analyzed
+                                st.rerun()
+
+            st.caption("Notion APIキーが未設定のため、Claude CLIのMCP接続を利用します。")
+
+            # Optional: API key setup
+            with st.popover("Notion APIキーを設定（高速化）"):
+                st.caption(
+                    "APIキーを設定すると直接APIアクセスで高速になります。\n\n"
+                    "1. [Notion Integrations](https://www.notion.so/profile/integrations) でインテグレーション作成\n"
+                    "2. 対象ページで「コネクト」から追加\n"
+                    "3. トークンを入力"
+                )
+                notion_key_input = st.text_input("Notion APIキー", type="password", key="notion_key_input")
+                if notion_key_input:
+                    env_content = ENV_FILE.read_text() if ENV_FILE.exists() else ""
+                    if "NOTION_API_KEY" not in env_content:
+                        env_content += f"\nNOTION_API_KEY={notion_key_input}\n"
+                    else:
+                        env_content = re.sub(r'NOTION_API_KEY=.*', f'NOTION_API_KEY={notion_key_input}', env_content)
+                    ENV_FILE.write_text(env_content)
+                    os.environ["NOTION_API_KEY"] = notion_key_input
+                    st.success("保存しました。ページを再読み込みしてください。")
 
     # Show Notion analysis result and pre-fill the main text area
     notion_data = st.session_state.get("notion_analyzed")
