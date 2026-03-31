@@ -298,21 +298,25 @@ JSONのみを返してください。"""
 
 # -- PDF generation --
 
-def generate_pdf(markdown_text: str) -> bytes:
-    """Convert markdown press release to styled PDF with proper layout."""
-    from fpdf import FPDF
+def _download_font() -> Path:
+    """Download Noto Sans JP font for PDF rendering."""
     import urllib.request
-
-    # Download Noto Sans JP font
     font_dir = Path(__file__).parent / "fonts"
     font_dir.mkdir(exist_ok=True)
     font_path = font_dir / "NotoSansJP-Regular.ttf"
-
     if not font_path.exists():
         urllib.request.urlretrieve(
             "https://github.com/google/fonts/raw/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
             str(font_path),
         )
+    return font_path
+
+
+def generate_pdf(markdown_text: str) -> bytes:
+    """Convert markdown to PDF matching the on-screen preview display."""
+    from fpdf import FPDF
+
+    font_path = _download_font()
 
     class PressReleasePDF(FPDF):
         def header(self):
@@ -325,164 +329,199 @@ def generate_pdf(markdown_text: str) -> bytes:
 
     pdf = PressReleasePDF()
     pdf.set_auto_page_break(auto=True, margin=25)
-    pdf.set_margins(25, 25, 25)
+    pdf.set_margins(25, 30, 25)
     pdf.add_page()
-    pdf.add_font("NotoSansJP", "", str(font_path), uni=True)
-    pdf.add_font("NotoSansJP", "B", str(font_path), uni=True)
+    pdf.add_font("NotoSansJP", "", str(font_path))
+    pdf.add_font("NotoSansJP", "B", str(font_path))
 
-    # -- PRESS RELEASE badge --
-    pdf.set_fill_color(120, 60, 40)
-    pdf.set_text_color(253, 250, 247)
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+
+    # -- PRESS RELEASE badge (matching preview .pr-badge) --
+    pdf.set_fill_color(26, 26, 26)
+    pdf.set_text_color(255, 255, 255)
     pdf.set_font("NotoSansJP", "B", 7)
-    pdf.cell(36, 5.5, "PRESS RELEASE", fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(8)
+    pdf.cell(36, 6, "PRESS RELEASE", fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(10)
 
-    # -- Parse and render --
+    # -- Parse and render markdown line by line --
     lines = markdown_text.split("\n")
     i = 0
-    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+
+    def _clean(text):
+        """Remove markdown bold markers."""
+        return text.replace("**", "")
+
+    def _render_table(start_idx):
+        """Render a markdown table with borders matching preview style."""
+        rows = []
+        idx = start_idx
+        while idx < len(lines) and lines[idx].strip().startswith("|"):
+            row = lines[idx].strip()
+            cells = [c.strip() for c in row.split("|")[1:-1]]
+            # Skip separator rows (---|---)
+            if not all(c.replace("-", "").replace(":", "").strip() == "" for c in cells):
+                rows.append([_clean(c) for c in cells])
+            idx += 1
+
+        if not rows:
+            return idx
+
+        num_cols = len(rows[0])
+        if num_cols == 2:
+            col_ws = [page_w * 0.28, page_w * 0.72]
+        else:
+            col_ws = [page_w / num_cols] * num_cols
+
+        pdf.set_draw_color(229, 229, 229)
+        pdf.set_line_width(0.3)
+
+        for ri, cells in enumerate(rows):
+            is_hdr = (ri == 0)
+            # Calculate row height from tallest cell
+            max_h = 7
+            for ci, cell in enumerate(cells):
+                cw = col_ws[ci] - 6 if ci < len(col_ws) else 24
+                pdf.set_font("NotoSansJP", "B" if is_hdr else "", 9)
+                lines_needed = max(1, pdf.get_string_width(cell) / max(cw, 1) + 0.9)
+                max_h = max(max_h, int(lines_needed) * 5 + 5)
+
+            y_start = pdf.get_y()
+            # Check page break
+            if y_start + max_h > pdf.h - pdf.b_margin:
+                pdf.add_page()
+                y_start = pdf.get_y()
+
+            for ci, cell in enumerate(cells):
+                cw = col_ws[ci] if ci < len(col_ws) else 30
+                x = pdf.l_margin + sum(col_ws[:ci])
+
+                # Background
+                if is_hdr:
+                    pdf.set_fill_color(245, 245, 245)
+                    pdf.rect(x, y_start, cw, max_h, "F")
+                # Border
+                pdf.rect(x, y_start, cw, max_h, "D")
+                # Text
+                if is_hdr:
+                    pdf.set_font("NotoSansJP", "B", 8.5)
+                    pdf.set_text_color(26, 26, 26)
+                else:
+                    pdf.set_font("NotoSansJP", "", 9)
+                    pdf.set_text_color(26, 26, 26)
+                pdf.set_xy(x + 3, y_start + 2)
+                pdf.multi_cell(cw - 6, 5, cell)
+
+            pdf.set_y(y_start + max_h)
+
+        pdf.ln(4)
+        return idx
 
     while i < len(lines):
         line = lines[i].strip()
 
         if not line:
-            pdf.ln(2)
+            pdf.ln(3)
             i += 1
             continue
 
-        # --- H1: Title ---
+        # --- H1: Title (matching preview h1) ---
         if line.startswith("# "):
-            text = line[2:].replace("**", "")
-            pdf.set_font("NotoSansJP", "B", 14)
+            text = _clean(line[2:])
+            pdf.set_font("NotoSansJP", "B", 15)
             pdf.set_text_color(26, 26, 26)
-            pdf.multi_cell(page_w, 7.5, text)
-            # terracotta underline
-            pdf.set_draw_color(120, 60, 40)
-            pdf.set_line_width(0.6)
+            pdf.multi_cell(page_w, 8, text)
+            # Bottom border matching preview: border-bottom: 2px solid #1A1A1A
+            pdf.set_draw_color(26, 26, 26)
+            pdf.set_line_width(0.5)
             pdf.line(pdf.l_margin, pdf.get_y() + 2, pdf.l_margin + page_w, pdf.get_y() + 2)
             pdf.set_line_width(0.2)
             pdf.ln(6)
 
-        # --- H2: Section header ---
+        # --- H2: Section header (matching preview h2) ---
         elif line.startswith("## "):
-            text = line[3:].replace("**", "")
-            pdf.ln(5)
-            pdf.set_draw_color(211, 131, 111)
-            pdf.set_line_width(0.8)
-            y_top = pdf.get_y()
-            pdf.set_font("NotoSansJP", "B", 11)
-            pdf.set_text_color(120, 60, 40)
-            pdf.set_x(pdf.l_margin + 5)
-            pdf.multi_cell(page_w - 5, 6.5, text)
-            y_bottom = pdf.get_y()
-            pdf.line(pdf.l_margin, y_top, pdf.l_margin, y_bottom)
+            text = _clean(line[3:])
+            pdf.ln(6)
+            pdf.set_font("NotoSansJP", "B", 12)
+            pdf.set_text_color(26, 26, 26)
+            pdf.multi_cell(page_w, 7, text)
+            # Bottom border matching preview: border-bottom: 1px solid #E5E5E5
+            pdf.set_draw_color(229, 229, 229)
+            pdf.set_line_width(0.3)
+            pdf.line(pdf.l_margin, pdf.get_y() + 1, pdf.l_margin + page_w, pdf.get_y() + 1)
             pdf.set_line_width(0.2)
-            pdf.ln(3)
-
-        # --- HR ---
-        elif line == "---":
             pdf.ln(4)
-            pdf.set_draw_color(224, 219, 213)
+
+        # --- HR (matching preview hr: border-top: 1px solid #E5E5E5) ---
+        elif line == "---":
+            pdf.ln(5)
+            pdf.set_draw_color(229, 229, 229)
             pdf.set_line_width(0.3)
             pdf.line(pdf.l_margin, pdf.get_y(), pdf.l_margin + page_w, pdf.get_y())
             pdf.set_line_width(0.2)
-            pdf.ln(4)
+            pdf.ln(5)
 
         # --- Table ---
         elif line.startswith("|") and "|" in line[1:]:
-            # Collect all table rows
-            table_rows = []
-            while i < len(lines) and lines[i].strip().startswith("|"):
-                row = lines[i].strip()
-                cells = [c.strip().replace("**", "") for c in row.split("|")[1:-1]]
-                # Skip separator rows
-                if not all(c.replace("-", "").replace(":", "").strip() == "" for c in cells):
-                    table_rows.append(cells)
-                i += 1
-            i -= 1  # will be incremented at end of loop
+            i = _render_table(i)
+            continue
 
-            if table_rows:
-                num_cols = len(table_rows[0])
-                if num_cols == 2:
-                    col_widths = [page_w * 0.25, page_w * 0.75]
-                else:
-                    col_widths = [page_w / num_cols] * num_cols
-
-                for row_idx, cells in enumerate(table_rows):
-                    is_header = (row_idx == 0)
-                    # Calculate row height based on content
-                    max_lines = 1
-                    for ci, cell in enumerate(cells):
-                        cw = col_widths[ci] - 4 if ci < len(col_widths) else 30
-                        pdf.set_font("NotoSansJP", "B" if is_header else "", 9)
-                        n = max(1, len(cell) * 4.5 / max(cw, 1))  # rough estimate
-                        max_lines = max(max_lines, n)
-                    row_h = max(7, int(max_lines) * 5 + 3)
-
-                    for ci, cell in enumerate(cells):
-                        cw = col_widths[ci] if ci < len(col_widths) else 30
-                        x_before = pdf.get_x()
-                        y_before = pdf.get_y()
-
-                        if is_header:
-                            pdf.set_fill_color(247, 242, 237)
-                            pdf.set_text_color(120, 60, 40)
-                            pdf.set_font("NotoSansJP", "B", 9)
-                        else:
-                            pdf.set_fill_color(255, 255, 255)
-                            pdf.set_text_color(26, 26, 26)
-                            pdf.set_font("NotoSansJP", "", 9)
-
-                        pdf.set_draw_color(224, 219, 213)
-                        pdf.rect(x_before, y_before, cw, row_h)
-                        if is_header:
-                            pdf.rect(x_before, y_before, cw, row_h, "F")
-                            pdf.rect(x_before, y_before, cw, row_h, "D")
-
-                        pdf.set_xy(x_before + 2, y_before + 1.5)
-                        pdf.multi_cell(cw - 4, 4.5, cell if ci < len(cells) else "")
-                        pdf.set_xy(x_before + cw, y_before)
-
-                    pdf.ln(row_h)
-                pdf.ln(3)
-
-        # --- Bullet ---
+        # --- Bullet list ---
         elif line.startswith("- ") or line.startswith("* "):
-            text = line[2:].replace("**", "")
-            pdf.set_font("NotoSansJP", "", 9.5)
-            pdf.set_text_color(0, 0, 0)
-            pdf.set_x(pdf.l_margin + 4)
-            pdf.cell(4, 5, chr(8226), new_x="END")  # bullet char
-            pdf.multi_cell(page_w - 10, 5, f" {text}")
+            text = _clean(line[2:])
+            pdf.set_font("NotoSansJP", "", 10)
+            pdf.set_text_color(26, 26, 26)
+            bullet_x = pdf.l_margin + 4
+            pdf.set_x(bullet_x)
+            pdf.cell(4, 5.5, chr(8226), new_x="END")
+            pdf.multi_cell(page_w - 10, 5.5, f" {text}")
             pdf.ln(1)
 
         # --- Numbered list ---
         elif len(line) > 2 and line[0].isdigit() and line[1] in ".)" and line[2] == " ":
             num = line[0]
-            text = line[3:].replace("**", "")
-            pdf.set_font("NotoSansJP", "", 9.5)
-            pdf.set_text_color(0, 0, 0)
+            text = _clean(line[3:])
+            pdf.set_font("NotoSansJP", "", 10)
+            pdf.set_text_color(26, 26, 26)
             pdf.set_x(pdf.l_margin + 4)
-            pdf.cell(6, 5, f"{num}.", new_x="END")
-            pdf.multi_cell(page_w - 12, 5, f" {text}")
+            pdf.cell(6, 5.5, f"{num}.", new_x="END")
+            pdf.multi_cell(page_w - 12, 5.5, f" {text}")
             pdf.ln(1)
 
-        # --- Bold-only line ---
+        # --- Blockquote (matching preview blockquote) ---
+        elif line.startswith("> "):
+            text = _clean(line[2:])
+            pdf.ln(2)
+            bq_x = pdf.l_margin
+            bq_y = pdf.get_y()
+            # Light background
+            pdf.set_fill_color(250, 250, 250)
+            pdf.set_font("NotoSansJP", "", 10)
+            pdf.set_text_color(64, 64, 64)
+            pdf.set_x(bq_x + 8)
+            pdf.multi_cell(page_w - 16, 6, text)
+            bq_y_end = pdf.get_y()
+            # Left border bar
+            pdf.set_draw_color(229, 229, 229)
+            pdf.set_line_width(1)
+            pdf.line(bq_x + 3, bq_y - 1, bq_x + 3, bq_y_end + 1)
+            pdf.set_line_width(0.2)
+            pdf.ln(3)
+
+        # --- Bold-only line (subtitle) ---
         elif line.startswith("**") and line.endswith("**"):
             text = line.strip("* ")
-            pdf.set_font("NotoSansJP", "B", 10)
+            pdf.set_font("NotoSansJP", "", 10)
             pdf.set_text_color(26, 26, 26)
             pdf.multi_cell(page_w, 5.5, text)
-            pdf.ln(2)
+            pdf.ln(3)
 
         # --- Regular paragraph ---
         else:
-            # Remove inline markdown
-            text = line.replace("**", "")
-            pdf.set_font("NotoSansJP", "", 9.5)
-            pdf.set_text_color(0, 0, 0)
+            text = _clean(line)
+            pdf.set_font("NotoSansJP", "", 10)
+            pdf.set_text_color(26, 26, 26)
             pdf.multi_cell(page_w, 5.5, text)
-            pdf.ln(2)
+            pdf.ln(3)
 
         i += 1
 
