@@ -313,14 +313,26 @@ def _download_font() -> Path:
 
 
 def generate_pdf(markdown_text: str) -> bytes:
-    """Convert markdown to PDF matching the on-screen preview display."""
+    """Convert markdown to PDF matching the on-screen preview.
+    Uses manual table rendering (fpdf2's write_html has table bugs)
+    and write_html for inline text formatting (bold, italic, links)."""
+    import re
     from fpdf import FPDF
 
     font_path = _download_font()
 
+    def _md_inline_to_html(text):
+        """Convert markdown inline formatting to HTML for write_html."""
+        # Bold: **text** → <b>text</b>
+        text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+        # Italic: *text* → <i>text</i> (avoid matching bold)
+        text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
+        # Links: [text](url) → <a href="url">text</a>
+        text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
+        return text
+
     class PressReleasePDF(FPDF):
-        def header(self):
-            pass
+        def header(self): pass
         def footer(self):
             self.set_y(-15)
             self.set_font("NotoSansJP", "", 7)
@@ -333,96 +345,45 @@ def generate_pdf(markdown_text: str) -> bytes:
     pdf.add_page()
     pdf.add_font("NotoSansJP", "", str(font_path))
     pdf.add_font("NotoSansJP", "B", str(font_path))
+    pdf.add_font("NotoSansJP", "I", str(font_path))
+    pdf.add_font("NotoSansJP", "BI", str(font_path))
 
     page_w = pdf.w - pdf.l_margin - pdf.r_margin
 
-    # -- PRESS RELEASE badge (matching preview .pr-badge) --
+    # -- PRESS RELEASE badge --
     pdf.set_fill_color(26, 26, 26)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("NotoSansJP", "B", 7)
     pdf.cell(36, 6, "PRESS RELEASE", fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(10)
 
-    # -- Parse and render markdown line by line --
-    lines = markdown_text.split("\n")
-    i = 0
-
-    def _clean(text):
-        """Remove markdown bold markers."""
-        return text.replace("**", "")
-
-    def _write_rich(text, base_size=10, line_h=5.5, width=None):
-        """Write text with inline **bold** support using multi_cell for wrapping."""
-        import re
-        w = width or page_w
-        # Split text into segments: (is_bold, content)
-        parts = re.split(r'(\*\*.*?\*\*)', text)
-        segments = []
-        for part in parts:
-            if part.startswith("**") and part.endswith("**"):
-                segments.append((True, part[2:-2]))
-            elif part:
-                segments.append((False, part))
-
-        if not segments:
-            return
-
-        # Check if we can render inline (single line) or need multi_cell
-        total_len = sum(len(s[1]) for s in segments)
-        avg_char_w = base_size * 0.5  # rough estimate for Japanese
-        fits_one_line = (total_len * avg_char_w / 2.83) < w  # rough pt-to-mm
-
-        if fits_one_line and len(segments) <= 4:
-            # Render inline using cell() for each segment
-            x_start = pdf.get_x()
-            for is_bold, content in segments:
-                pdf.set_font("NotoSansJP", "B" if is_bold else "", base_size)
-                sw = pdf.get_string_width(content)
-                if pdf.get_x() + sw > pdf.l_margin + w:
-                    # Wrap to next line
-                    pdf.ln(line_h)
-                    pdf.set_x(pdf.l_margin)
-                pdf.cell(sw, line_h, content, new_x="END")
-            pdf.ln(line_h)
-        else:
-            # For longer text, concatenate and use multi_cell with bold markers stripped
-            # but render bold segments with font switching
-            # Fallback: build full text, render with multi_cell, bold for entire line if has bold
-            has_bold = any(b for b, _ in segments)
-            full_text = "".join(s[1] for s in segments)
-            if has_bold and len(segments) == 1:
-                pdf.set_font("NotoSansJP", "B", base_size)
-            else:
-                pdf.set_font("NotoSansJP", "", base_size)
-            pdf.multi_cell(w, line_h, full_text)
+    def _write_text(html_text, size=10):
+        """Render inline-formatted text using write_html."""
+        pdf.set_font("NotoSansJP", "", size)
+        pdf.set_text_color(26, 26, 26)
+        pdf.write_html(f'<font face="NotoSansJP" size="{size}">{html_text}</font>')
 
     def _render_table(start_idx):
-        """Render a markdown table with borders matching preview style."""
+        """Render a markdown table with borders (manual, avoids fpdf2 bug)."""
         rows = []
         idx = start_idx
         while idx < len(lines) and lines[idx].strip().startswith("|"):
             row = lines[idx].strip()
-            cells = [c.strip() for c in row.split("|")[1:-1]]
-            # Skip separator rows (---|---)
+            cells = [c.strip().replace("**", "") for c in row.split("|")[1:-1]]
             if not all(c.replace("-", "").replace(":", "").strip() == "" for c in cells):
-                rows.append([_clean(c) for c in cells])
+                rows.append(cells)
             idx += 1
-
         if not rows:
             return idx
 
         num_cols = len(rows[0])
-        if num_cols == 2:
-            col_ws = [page_w * 0.28, page_w * 0.72]
-        else:
-            col_ws = [page_w / num_cols] * num_cols
+        col_ws = [page_w * 0.28, page_w * 0.72] if num_cols == 2 else [page_w / num_cols] * num_cols
 
         pdf.set_draw_color(229, 229, 229)
         pdf.set_line_width(0.3)
 
         for ri, cells in enumerate(rows):
             is_hdr = (ri == 0)
-            # Calculate row height from tallest cell
             max_h = 7
             for ci, cell in enumerate(cells):
                 cw = col_ws[ci] - 6 if ci < len(col_ws) else 24
@@ -431,7 +392,6 @@ def generate_pdf(markdown_text: str) -> bytes:
                 max_h = max(max_h, int(lines_needed) * 5 + 5)
 
             y_start = pdf.get_y()
-            # Check page break
             if y_start + max_h > pdf.h - pdf.b_margin:
                 pdf.add_page()
                 y_start = pdf.get_y()
@@ -439,27 +399,20 @@ def generate_pdf(markdown_text: str) -> bytes:
             for ci, cell in enumerate(cells):
                 cw = col_ws[ci] if ci < len(col_ws) else 30
                 x = pdf.l_margin + sum(col_ws[:ci])
-
-                # Background
                 if is_hdr:
                     pdf.set_fill_color(245, 245, 245)
                     pdf.rect(x, y_start, cw, max_h, "F")
-                # Border
                 pdf.rect(x, y_start, cw, max_h, "D")
-                # Text
-                if is_hdr:
-                    pdf.set_font("NotoSansJP", "B", 8.5)
-                    pdf.set_text_color(26, 26, 26)
-                else:
-                    pdf.set_font("NotoSansJP", "", 9)
-                    pdf.set_text_color(26, 26, 26)
+                pdf.set_font("NotoSansJP", "B" if is_hdr else "", 9 if is_hdr else 9)
+                pdf.set_text_color(26, 26, 26)
                 pdf.set_xy(x + 3, y_start + 2)
                 pdf.multi_cell(cw - 6, 5, cell)
-
             pdf.set_y(y_start + max_h)
-
         pdf.ln(4)
         return idx
+
+    lines = markdown_text.split("\n")
+    i = 0
 
     while i < len(lines):
         line = lines[i].strip()
@@ -469,34 +422,32 @@ def generate_pdf(markdown_text: str) -> bytes:
             i += 1
             continue
 
-        # --- H1: Title (matching preview h1) ---
+        # --- H1: Title ---
         if line.startswith("# "):
-            text = _clean(line[2:])
+            text = line[2:].replace("**", "")
             pdf.set_font("NotoSansJP", "B", 15)
             pdf.set_text_color(26, 26, 26)
             pdf.multi_cell(page_w, 8, text)
-            # Bottom border matching preview: border-bottom: 2px solid #1A1A1A
             pdf.set_draw_color(26, 26, 26)
             pdf.set_line_width(0.5)
             pdf.line(pdf.l_margin, pdf.get_y() + 2, pdf.l_margin + page_w, pdf.get_y() + 2)
             pdf.set_line_width(0.2)
             pdf.ln(6)
 
-        # --- H2: Section header (matching preview h2) ---
+        # --- H2: Section header ---
         elif line.startswith("## "):
-            text = _clean(line[3:])
+            text = line[3:].replace("**", "")
             pdf.ln(6)
             pdf.set_font("NotoSansJP", "B", 12)
             pdf.set_text_color(26, 26, 26)
             pdf.multi_cell(page_w, 7, text)
-            # Bottom border matching preview: border-bottom: 1px solid #E5E5E5
             pdf.set_draw_color(229, 229, 229)
             pdf.set_line_width(0.3)
             pdf.line(pdf.l_margin, pdf.get_y() + 1, pdf.l_margin + page_w, pdf.get_y() + 1)
             pdf.set_line_width(0.2)
             pdf.ln(4)
 
-        # --- HR (matching preview hr: border-top: 1px solid #E5E5E5) ---
+        # --- HR ---
         elif line == "---":
             pdf.ln(5)
             pdf.set_draw_color(229, 229, 229)
@@ -512,39 +463,39 @@ def generate_pdf(markdown_text: str) -> bytes:
 
         # --- Bullet list ---
         elif line.startswith("- ") or line.startswith("* "):
-            text = line[2:]
+            html = _md_inline_to_html(line[2:])
             pdf.set_font("NotoSansJP", "", 10)
             pdf.set_text_color(26, 26, 26)
             pdf.set_x(pdf.l_margin + 4)
             pdf.cell(4, 5.5, chr(8226), new_x="END")
-            _write_rich(f" {text}", base_size=10, line_h=5.5, width=page_w - 10)
-            pdf.ln(1)
+            pdf.write_html(f'<font face="NotoSansJP" size="10"> {html}</font>')
+            pdf.ln(2)
 
         # --- Numbered list ---
         elif len(line) > 2 and line[0].isdigit() and line[1] in ".)" and line[2] == " ":
             num = line[0]
-            text = line[3:]
+            html = _md_inline_to_html(line[3:])
             pdf.set_font("NotoSansJP", "", 10)
             pdf.set_text_color(26, 26, 26)
             pdf.set_x(pdf.l_margin + 4)
             pdf.cell(6, 5.5, f"{num}.", new_x="END")
-            _write_rich(f" {text}", base_size=10, line_h=5.5, width=page_w - 12)
-            pdf.ln(1)
-
-        # --- Blockquote (matching preview blockquote) ---
-        elif line.startswith("> "):
-            text = line[2:]
+            pdf.write_html(f'<font face="NotoSansJP" size="10"> {html}</font>')
             pdf.ln(2)
-            bq_x = pdf.l_margin
+
+        # --- Blockquote ---
+        elif line.startswith("> "):
+            html = _md_inline_to_html(line[2:])
+            pdf.ln(2)
             bq_y = pdf.get_y()
+            pdf.set_x(pdf.l_margin + 8)
+            pdf.set_font("NotoSansJP", "", 10)
             pdf.set_text_color(64, 64, 64)
-            pdf.set_x(bq_x + 8)
-            _write_rich(text, base_size=10, line_h=6, width=page_w - 16)
+            pdf.write_html(f'<font face="NotoSansJP" size="10" color="#404040">{html}</font>')
+            pdf.ln()
             bq_y_end = pdf.get_y()
-            # Left border bar
             pdf.set_draw_color(229, 229, 229)
             pdf.set_line_width(1)
-            pdf.line(bq_x + 3, bq_y - 1, bq_x + 3, bq_y_end + 1)
+            pdf.line(pdf.l_margin + 3, bq_y - 1, pdf.l_margin + 3, bq_y_end + 1)
             pdf.set_line_width(0.2)
             pdf.ln(3)
 
@@ -556,10 +507,11 @@ def generate_pdf(markdown_text: str) -> bytes:
             pdf.multi_cell(page_w, 5.5, text)
             pdf.ln(3)
 
-        # --- Regular paragraph ---
+        # --- Regular paragraph (with inline formatting) ---
         else:
+            html = _md_inline_to_html(line)
             pdf.set_text_color(26, 26, 26)
-            _write_rich(line, base_size=10, line_h=5.5)
+            _write_text(html, size=10)
             pdf.ln(3)
 
         i += 1
