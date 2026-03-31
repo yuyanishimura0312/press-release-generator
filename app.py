@@ -902,7 +902,7 @@ def delete_history(filename: str):
 
 st.set_page_config(
     page_title="プレスリリース自動生成",
-    page_icon="PR",
+    page_icon=str(Path(__file__).parent / "logo.png"),
     layout="wide",
 )
 
