@@ -312,211 +312,144 @@ def _download_font() -> Path:
     return font_path
 
 
-def generate_pdf(markdown_text: str) -> bytes:
-    """Convert markdown to PDF matching the on-screen preview.
-    Uses manual table rendering (fpdf2's write_html has table bugs)
-    and write_html for inline text formatting (bold, italic, links)."""
-    import re
-    from fpdf import FPDF
+def generate_pdf_html(markdown_text: str) -> str:
+    """Generate a self-contained, print-ready HTML file matching the on-screen preview.
+    When opened in a browser and printed/saved as PDF, produces identical output."""
+    html_body = md_lib.markdown(markdown_text, extensions=["tables", "fenced_code"])
 
-    font_path = _download_font()
-
-    def _md_inline_to_html(text):
-        """Convert markdown inline formatting to HTML for write_html."""
-        # Bold: **text** → <b>text</b>
-        text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-        # Italic: *text* → <i>text</i> (avoid matching bold)
-        text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
-        # Links: [text](url) → <a href="url">text</a>
-        text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
-        return text
-
-    class PressReleasePDF(FPDF):
-        def header(self): pass
-        def footer(self):
-            self.set_y(-15)
-            self.set_font("NotoSansJP", "", 7)
-            self.set_text_color(156, 149, 144)
-            self.cell(0, 10, f"Page {self.page_no()}", align="C")
-
-    pdf = PressReleasePDF()
-    pdf.set_auto_page_break(auto=True, margin=25)
-    pdf.set_margins(25, 30, 25)
-    pdf.add_page()
-    pdf.add_font("NotoSansJP", "", str(font_path))
-    pdf.add_font("NotoSansJP", "B", str(font_path))
-    pdf.add_font("NotoSansJP", "I", str(font_path))
-    pdf.add_font("NotoSansJP", "BI", str(font_path))
-
-    page_w = pdf.w - pdf.l_margin - pdf.r_margin
-
-    # -- PRESS RELEASE badge --
-    pdf.set_fill_color(26, 26, 26)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("NotoSansJP", "B", 7)
-    pdf.cell(36, 6, "PRESS RELEASE", fill=True, align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(10)
-
-    def _write_text(html_text, size=10):
-        """Render inline-formatted text using write_html."""
-        pdf.set_font("NotoSansJP", "", size)
-        pdf.set_text_color(26, 26, 26)
-        pdf.write_html(f'<font face="NotoSansJP" size="{size}">{html_text}</font>')
-
-    def _render_table(start_idx):
-        """Render a markdown table with borders (manual, avoids fpdf2 bug)."""
-        rows = []
-        idx = start_idx
-        while idx < len(lines) and lines[idx].strip().startswith("|"):
-            row = lines[idx].strip()
-            cells = [c.strip().replace("**", "") for c in row.split("|")[1:-1]]
-            if not all(c.replace("-", "").replace(":", "").strip() == "" for c in cells):
-                rows.append(cells)
-            idx += 1
-        if not rows:
-            return idx
-
-        num_cols = len(rows[0])
-        col_ws = [page_w * 0.28, page_w * 0.72] if num_cols == 2 else [page_w / num_cols] * num_cols
-
-        pdf.set_draw_color(229, 229, 229)
-        pdf.set_line_width(0.3)
-
-        for ri, cells in enumerate(rows):
-            is_hdr = (ri == 0)
-            max_h = 7
-            for ci, cell in enumerate(cells):
-                cw = col_ws[ci] - 6 if ci < len(col_ws) else 24
-                pdf.set_font("NotoSansJP", "B" if is_hdr else "", 9)
-                lines_needed = max(1, pdf.get_string_width(cell) / max(cw, 1) + 0.9)
-                max_h = max(max_h, int(lines_needed) * 5 + 5)
-
-            y_start = pdf.get_y()
-            if y_start + max_h > pdf.h - pdf.b_margin:
-                pdf.add_page()
-                y_start = pdf.get_y()
-
-            for ci, cell in enumerate(cells):
-                cw = col_ws[ci] if ci < len(col_ws) else 30
-                x = pdf.l_margin + sum(col_ws[:ci])
-                if is_hdr:
-                    pdf.set_fill_color(245, 245, 245)
-                    pdf.rect(x, y_start, cw, max_h, "F")
-                pdf.rect(x, y_start, cw, max_h, "D")
-                pdf.set_font("NotoSansJP", "B" if is_hdr else "", 9 if is_hdr else 9)
-                pdf.set_text_color(26, 26, 26)
-                pdf.set_xy(x + 3, y_start + 2)
-                pdf.multi_cell(cw - 6, 5, cell)
-            pdf.set_y(y_start + max_h)
-        pdf.ln(4)
-        return idx
-
-    lines = markdown_text.split("\n")
-    i = 0
-
-    while i < len(lines):
-        line = lines[i].strip()
-
-        if not line:
-            pdf.ln(3)
-            i += 1
-            continue
-
-        # --- H1: Title ---
-        if line.startswith("# "):
-            text = line[2:].replace("**", "")
-            pdf.set_font("NotoSansJP", "B", 15)
-            pdf.set_text_color(26, 26, 26)
-            pdf.multi_cell(page_w, 8, text)
-            pdf.set_draw_color(26, 26, 26)
-            pdf.set_line_width(0.5)
-            pdf.line(pdf.l_margin, pdf.get_y() + 2, pdf.l_margin + page_w, pdf.get_y() + 2)
-            pdf.set_line_width(0.2)
-            pdf.ln(6)
-
-        # --- H2: Section header ---
-        elif line.startswith("## "):
-            text = line[3:].replace("**", "")
-            pdf.ln(6)
-            pdf.set_font("NotoSansJP", "B", 12)
-            pdf.set_text_color(26, 26, 26)
-            pdf.multi_cell(page_w, 7, text)
-            pdf.set_draw_color(229, 229, 229)
-            pdf.set_line_width(0.3)
-            pdf.line(pdf.l_margin, pdf.get_y() + 1, pdf.l_margin + page_w, pdf.get_y() + 1)
-            pdf.set_line_width(0.2)
-            pdf.ln(4)
-
-        # --- HR ---
-        elif line == "---":
-            pdf.ln(5)
-            pdf.set_draw_color(229, 229, 229)
-            pdf.set_line_width(0.3)
-            pdf.line(pdf.l_margin, pdf.get_y(), pdf.l_margin + page_w, pdf.get_y())
-            pdf.set_line_width(0.2)
-            pdf.ln(5)
-
-        # --- Table ---
-        elif line.startswith("|") and "|" in line[1:]:
-            i = _render_table(i)
-            continue
-
-        # --- Bullet list ---
-        elif line.startswith("- ") or line.startswith("* "):
-            html = _md_inline_to_html(line[2:])
-            pdf.set_font("NotoSansJP", "", 10)
-            pdf.set_text_color(26, 26, 26)
-            pdf.set_x(pdf.l_margin + 4)
-            pdf.cell(4, 5.5, chr(8226), new_x="END")
-            pdf.write_html(f'<font face="NotoSansJP" size="10"> {html}</font>')
-            pdf.ln(2)
-
-        # --- Numbered list ---
-        elif len(line) > 2 and line[0].isdigit() and line[1] in ".)" and line[2] == " ":
-            num = line[0]
-            html = _md_inline_to_html(line[3:])
-            pdf.set_font("NotoSansJP", "", 10)
-            pdf.set_text_color(26, 26, 26)
-            pdf.set_x(pdf.l_margin + 4)
-            pdf.cell(6, 5.5, f"{num}.", new_x="END")
-            pdf.write_html(f'<font face="NotoSansJP" size="10"> {html}</font>')
-            pdf.ln(2)
-
-        # --- Blockquote ---
-        elif line.startswith("> "):
-            html = _md_inline_to_html(line[2:])
-            pdf.ln(2)
-            bq_y = pdf.get_y()
-            pdf.set_x(pdf.l_margin + 8)
-            pdf.set_font("NotoSansJP", "", 10)
-            pdf.set_text_color(64, 64, 64)
-            pdf.write_html(f'<font face="NotoSansJP" size="10" color="#404040">{html}</font>')
-            pdf.ln()
-            bq_y_end = pdf.get_y()
-            pdf.set_draw_color(229, 229, 229)
-            pdf.set_line_width(1)
-            pdf.line(pdf.l_margin + 3, bq_y - 1, pdf.l_margin + 3, bq_y_end + 1)
-            pdf.set_line_width(0.2)
-            pdf.ln(3)
-
-        # --- Bold-only line (subtitle) ---
-        elif line.startswith("**") and line.endswith("**"):
-            text = line.strip("* ")
-            pdf.set_font("NotoSansJP", "B", 10)
-            pdf.set_text_color(26, 26, 26)
-            pdf.multi_cell(page_w, 5.5, text)
-            pdf.ln(3)
-
-        # --- Regular paragraph (with inline formatting) ---
-        else:
-            html = _md_inline_to_html(line)
-            pdf.set_text_color(26, 26, 26)
-            _write_text(html, size=10)
-            pdf.ln(3)
-
-        i += 1
-
-    return bytes(pdf.output())
+    return f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>プレスリリース</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;600;700&display=swap');
+  @page {{
+    size: A4;
+    margin: 25mm 20mm 20mm 20mm;
+  }}
+  @media print {{
+    body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    .no-print {{ display: none !important; }}
+  }}
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{
+    font-family: 'Noto Sans JP', -apple-system, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.85;
+    color: #1A1A1A;
+    max-width: 700px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }}
+  .pr-badge {{
+    display: inline-block;
+    background: #1A1A1A;
+    color: #FFF;
+    font-size: 7.5pt;
+    padding: 3px 14px;
+    border-radius: 2px;
+    margin-bottom: 24px;
+    letter-spacing: 0.2em;
+    font-weight: 600;
+  }}
+  .print-btn {{
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    background: #1A1A1A;
+    color: #FFF;
+    border: none;
+    padding: 10px 24px;
+    font-size: 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'Noto Sans JP', sans-serif;
+    z-index: 1000;
+  }}
+  .print-btn:hover {{ background: #333; }}
+  h1 {{
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1A1A1A;
+    border-bottom: 2.5px solid #1A1A1A;
+    padding-bottom: 14px;
+    margin-bottom: 10px;
+    line-height: 1.5;
+  }}
+  h2 {{
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #1A1A1A;
+    margin-top: 32px;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #E5E5E5;
+  }}
+  h3 {{
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #1A1A1A;
+    margin-top: 24px;
+    margin-bottom: 8px;
+  }}
+  p {{
+    margin-bottom: 14px;
+    font-size: 10.5pt;
+    line-height: 1.85;
+  }}
+  strong {{ font-weight: 700; }}
+  em {{ font-style: italic; }}
+  hr {{
+    border: none;
+    border-top: 1px solid #E5E5E5;
+    margin: 28px 0;
+  }}
+  table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 9.5pt;
+  }}
+  th, td {{
+    border: 1px solid #E5E5E5;
+    padding: 10px 14px;
+    text-align: left;
+    line-height: 1.6;
+  }}
+  th {{
+    background: #F5F5F5;
+    font-weight: 600;
+    font-size: 9pt;
+    width: 120px;
+  }}
+  ul, ol {{
+    padding-left: 22px;
+    margin-bottom: 14px;
+  }}
+  li {{
+    margin-bottom: 5px;
+    font-size: 10.5pt;
+    line-height: 1.75;
+  }}
+  blockquote {{
+    border-left: 3px solid #E5E5E5;
+    padding: 12px 22px;
+    margin: 18px 0;
+    background: #FAFAFA;
+    color: #404040;
+    border-radius: 0 6px 6px 0;
+    font-size: 10.5pt;
+  }}
+  a {{ color: #2563EB; text-decoration: none; }}
+</style>
+</head>
+<body>
+  <button class="print-btn no-print" onclick="window.print()">PDF\u3068\u3057\u3066\u4fdd\u5b58</button>
+  <span class="pr-badge">PRESS RELEASE</span>
+  {html_body}
+</body>
+</html>"""
 
 
 # -- Web scraping for company info --
@@ -1707,13 +1640,11 @@ with tab_input:
         # Action bar
         col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
         with col_dl1:
-            try:
-                pdf_data = generate_pdf(result)
-                st.download_button("PDF", data=pdf_data,
-                    file_name=f"press_release_{datetime.now().strftime('%Y%m%d')}.pdf",
-                    mime="application/pdf", use_container_width=True, type="primary")
-            except Exception:
-                st.button("PDF (error)", disabled=True, use_container_width=True)
+            pdf_html = generate_pdf_html(result)
+            st.download_button("PDF (HTML)", data=pdf_html.encode("utf-8"),
+                file_name=f"press_release_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html", use_container_width=True, type="primary",
+                help="ダウンロード後、ブラウザで開いて「PDFとして保存」ボタンを押してください")
         with col_dl2:
             st.download_button("Markdown", data=result,
                 file_name=f"press_release_{datetime.now().strftime('%Y%m%d')}.md",
