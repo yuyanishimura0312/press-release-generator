@@ -528,7 +528,15 @@ def scrape_company_info(url: str) -> dict:
 
 def get_anthropic_client() -> anthropic.Anthropic:
     """Get Anthropic client with API key from server-side secrets."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = None
+    # Try Streamlit secrets first, then environment variable
+    try:
+        if hasattr(st, "secrets") and "ANTHROPIC_API_KEY" in st.secrets:
+            api_key = st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        pass
+    if not api_key:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("サービスが一時的に利用できません。管理者にお問い合わせください。")
     return anthropic.Anthropic(api_key=api_key)
