@@ -1354,7 +1354,10 @@ with tab_input:
                 company_info = result.get("company", {})
                 company_url_detected = company_info.get("company_url", "")
 
-                if company_url_detected:
+                # Only fetch company info if not already set
+                existing_company = st.session_state.get("extracted_company", {})
+                has_company = existing_company.get("company_name") and existing_company.get("representative")
+                if company_url_detected and not has_company:
                     with st.spinner("会社情報を自動取得中..."):
                         try:
                             scraped = scrape_company_info(company_url_detected)
@@ -1566,6 +1569,10 @@ with tab_input:
 
     can_generate = bool(user_input.strip())
 
+    # Also check if Notion analyzed data is available as fallback input
+    if not can_generate and st.session_state.get("notion_analyzed"):
+        can_generate = True
+
     # -- Generate button --
     st.divider()
 
@@ -1585,6 +1592,11 @@ with tab_input:
     }
 
     missing_company = not all([company_name, representative, location])
+    # Also check session state for extracted company data
+    if missing_company and st.session_state.get("extracted_company"):
+        ec = st.session_state["extracted_company"]
+        if ec.get("company_name") and ec.get("representative") and ec.get("location"):
+            missing_company = False
     if missing_company:
         st.warning("会社情報タブで会社名・代表者名・所在地を入力するか、URLから自動取得してください。")
 
