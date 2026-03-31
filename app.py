@@ -54,10 +54,27 @@ RELEASE_DESCRIPTIONS = {
 
 # -- Profile helpers (session-based for multi-user safety) --
 
+def _load_profiles_from_disk() -> dict:
+    """Load profiles from JSON file on disk."""
+    profiles_file = PROFILE_DIR / "profiles.json"
+    if profiles_file.exists():
+        try:
+            return json.loads(profiles_file.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_profiles_to_disk(profiles: dict):
+    """Save profiles to JSON file on disk."""
+    profiles_file = PROFILE_DIR / "profiles.json"
+    profiles_file.write_text(json.dumps(profiles, ensure_ascii=False, indent=2))
+
+
 def _init_session_profiles():
-    """Initialize session-based profile storage."""
+    """Initialize session-based profile storage from disk."""
     if "user_profiles" not in st.session_state:
-        st.session_state["user_profiles"] = {}
+        st.session_state["user_profiles"] = _load_profiles_from_disk()
 
 
 def list_profiles() -> list[str]:
@@ -73,6 +90,7 @@ def load_profile(name: str) -> dict:
 def save_profile(data: dict, name: str):
     _init_session_profiles()
     st.session_state["user_profiles"][name] = data
+    _save_profiles_to_disk(st.session_state["user_profiles"])
 
 
 # -- Notion page reader --
@@ -1181,6 +1199,10 @@ with st.sidebar:
                         st.error(f"{e}")
                 if extracted_data:
                     st.session_state["extracted_company"] = extracted_data
+                    # Auto-save as profile so it appears in the dropdown
+                    profile_name = extracted_data.get("company_name", "").strip()
+                    if profile_name:
+                        save_profile(extracted_data, profile_name)
                     st.rerun()
             else:
                 st.error("取得失敗")
