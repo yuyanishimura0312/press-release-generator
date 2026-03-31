@@ -1120,14 +1120,20 @@ with st.sidebar:
 
     st.header("PROFILE")
     profiles = list_profiles()
+    # Default to first profile (e.g. 株式会社エッセンス) if available
+    default_idx = 1 if profiles else 0
     profile_choice = st.selectbox(
         "会社プロフィール",
         ["（新規入力）"] + profiles,
+        index=default_idx,
         key="profile_select",
         label_visibility="collapsed",
     )
     if profile_choice != "（新規入力）" and profile_choice in profiles:
         loaded = load_profile(profile_choice)
+        # Auto-populate extracted_company so company info tab is pre-filled
+        if "extracted_company" not in st.session_state or not st.session_state["extracted_company"]:
+            st.session_state["extracted_company"] = loaded
     else:
         loaded = None
 
